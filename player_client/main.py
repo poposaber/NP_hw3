@@ -1,5 +1,5 @@
 from .player_client_window import PlayerClientWindow
 
 pc = PlayerClientWindow()
-pc.window_loop()
+pc.start()
 

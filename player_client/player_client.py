@@ -1,7 +1,7 @@
 import uuid
 import threading
 import time
-from typing import Optional
+from typing import Optional, Callable
 from base.message_format_passer import MessageFormatPasser
 from protocols.protocols import Formats, Words
 
@@ -9,7 +9,9 @@ class PlayerClient:
     def __init__(self, host: str = "127.0.0.1", port: int = 21354,
                  max_connect_try_count: int = 5, max_handshake_try_count: int = 5,
                  passer: Optional[MessageFormatPasser] = None, 
-                 connect_timeout = 2.0, handshake_timeout = 3.0, receive_timeout = 1.0) -> None:
+                 connect_timeout = 2.0, handshake_timeout = 3.0, receive_timeout = 1.0, 
+                 on_connection_done: Optional[Callable[[], None]] = None, 
+                 on_connection_fail: Optional[Callable[[], None]] = None) -> None:
         self.host = host
         self.port = port
         self.max_connect_try_count = max_connect_try_count
@@ -18,6 +20,8 @@ class PlayerClient:
         self.handshake_timeout = handshake_timeout
         self.receive_timeout = receive_timeout
         self.lobby_passer = passer or MessageFormatPasser()
+        self.on_connection_done = on_connection_done
+        self.on_connection_fail = on_connection_fail
         self.stop_event = threading.Event()
         self.thread: Optional[threading.Thread] = None
         self.pending_requests: dict[str, tuple[tuple[str, dict], bool, Optional[tuple[str, dict]]]] = {}
@@ -89,11 +93,28 @@ class PlayerClient:
     def run(self):
         if not self.connect():
             print("[PlayerClient] give up connecting")
+            if self.on_connection_fail and not self.stop_event.is_set():
+                try:
+                    self.on_connection_fail()
+                except Exception as e:
+                    print(f"[PlayerClient] exception raised when calling on_connection_fail(): {e}")
             return
         if not self.handshake():
             print("[PlayerClient] give up handshake")
+            if self.on_connection_fail and not self.stop_event.is_set():
+                try:
+                    self.on_connection_fail()
+                except Exception as e:
+                    print(f"[PlayerClient] exception raised when calling on_connection_fail(): {e}")
             self.reset_lobby_passer()
             return
+        
+        if self.on_connection_done:
+            try:
+                self.on_connection_done()
+            except Exception as e:
+                print(f"[PlayerClient] exception raised when calling on_connection_done(): {e}")
+
         print("[PlayerClient] enter main loop")
         try:
             while not self.stop_event.is_set():
@@ -110,7 +131,7 @@ class PlayerClient:
         if self.thread and self.thread.is_alive():
             return
         self.stop_event.clear()
-        self.thread = threading.Thread(target=self.run)
+        self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
 
     def stop(self):
