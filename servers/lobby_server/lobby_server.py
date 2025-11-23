@@ -3,6 +3,7 @@ import socket
 from base.message_format_passer import MessageFormatPasser
 from protocols.protocols import Formats, Words
 import time
+import uuid
 
 class LobbyServer:
     def __init__(self, host: str = "0.0.0.0", port: int = 21354, accept_timeout = 1.0, receive_timeout = 2.0) -> None:
@@ -12,7 +13,7 @@ class LobbyServer:
         self.accept_timeout = accept_timeout
         self.receive_timeout = receive_timeout
         self.connections: list[MessageFormatPasser] = []
-        self.mfpassers_username: dict[MessageFormatPasser, str | None] = {}
+        self.passer_player_dict: dict[MessageFormatPasser, str | None] = {}
         self.db_server_passer: MessageFormatPasser | None = None
         self.stop_event = threading.Event()
         self.pending_db_response_dict: dict[str, tuple[bool, str, dict]] = {}
@@ -81,8 +82,18 @@ class LobbyServer:
     def handle_connections(self, msgfmt_passer: MessageFormatPasser) -> None:
         """Check handshake and pass to corresponding methods."""
         try:
-            while True:
-                msgfmt_passer.receive_args(Formats.MESSAGE)
+            #while True:
+            received_message_id, message_type, data = msgfmt_passer.receive_args(Formats.MESSAGE)
+            if message_type != Words.MessageType.HANDSHAKE:
+                print(f"[LOBBYSERVER] received message_type {message_type}, expected {Words.MessageType.HANDSHAKE}")
+
+            if data[Words.DataKeys.Handshake.ROLE] == Words.Roles.PLAYER:
+                message_id = str(uuid.uuid4())
+                msgfmt_passer.send_args(Formats.MESSAGE, message_id, Words.MessageType.RESPONSE, {
+                    Words.DataKeys.Response.RESPONDING_ID: received_message_id, 
+                    Words.DataKeys.Response.RESULT: Words.Result.SUCCESS
+                })
+                self.handle_player(msgfmt_passer)
             # if connection_type == Words.ConnectionType.CLIENT:
             #     self.handle_client(msgfmt_passer)
             # elif connection_type == Words.ConnectionType.DATABASE_SERVER:
@@ -95,3 +106,15 @@ class LobbyServer:
         self.connections.remove(msgfmt_passer)
         print(f"Connection closed. Active connections: {len(self.connections)}")
         msgfmt_passer.close()
+
+    def handle_player(self, passer: MessageFormatPasser):
+        self.passer_player_dict[passer] = None
+        
+        try:
+            while not self.stop_event.is_set():
+                passer.receive_args(Formats.MESSAGE)
+        except Exception as e:
+            print(f"[LOBBYSERVER] exception raised in handle_player: {e}")
+
+        del self.passer_player_dict[passer]
+

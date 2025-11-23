@@ -64,7 +64,11 @@ class PlayerClient:
                     error_message = f"received responding_id {responding_id}, expected {message_id}"
                     print(f"[PlayerClient] {error_message}")
                     raise Exception(error_message)
-
+                result = data[Words.DataKeys.Response.RESULT]
+                if result != Words.Result.SUCCESS:
+                    error_message = f"received result {result}, expected {Words.Result.SUCCESS}"
+                    print(f"[PlayerClient] {error_message}")
+                    raise Exception(error_message)
                 return True
             except Exception as e:
                 attempt += 1
