@@ -1,5 +1,8 @@
+# next: put the loop to run()
+
 import uuid
 import threading
+from queue import Queue
 import time
 from typing import Optional, Callable
 from base.message_format_passer import MessageFormatPasser
@@ -24,9 +27,12 @@ class PlayerClient:
         self.on_connection_fail = on_connection_fail
         self.stop_event = threading.Event()
         self.thread: Optional[threading.Thread] = None
-        self.pending_requests: dict[str, tuple[tuple[str, dict], bool, Optional[tuple[str, dict]]]] = {}
+        # self.send_msg_thread: Optional[threading.Thread] = None
+        self.receive_msg_thread: Optional[threading.Thread] = None
+        self.pending_messages: dict[str, tuple[tuple[str, dict], bool, Optional[tuple[str, dict]]]] = {}
         """{message_id: ((message_type, data) of sending message, is_sent, (message_type, data) of receiving message)}"""
-        self.pending_requests_lock = threading.Lock()
+        self.pending_messages_lock = threading.Lock()
+        self.event_queue: Queue = Queue()
 
     def connect(self) -> bool:
         attempt = 1
@@ -81,14 +87,66 @@ class PlayerClient:
                     continue
                 print(f"[PlayerClient] handshake failed: {e}, retrying...")
                 time.sleep(1)
-                
         return False
     
-    def pend(self, data: dict) -> str:
+    def try_login(self, username: str, password: str) -> tuple[bool, dict]:
+        return (False, {})
+    
+    def pend_request(self, data: dict) -> str:
         message_id = str(uuid.uuid4())
-        with self.pending_requests_lock:
-            self.pending_requests[message_id] = ((Words.MessageType.REQUEST, data), False, None)
+        with self.pending_messages_lock:
+            self.pending_messages[message_id] = ((Words.MessageType.REQUEST, data), False, None)
         return message_id
+    
+    def wait_response(self, message_id: str, timeout: Optional[float] = None) -> Optional[dict]:
+        deadline = time.monotonic() + (timeout if timeout is not None else float('inf'))
+        while not self.stop_event.is_set and time.monotonic() < deadline:
+            with self.pending_messages_lock:
+                entry = self.pending_messages[message_id]
+                if entry is None:
+                    return None
+                _, _, recv = entry
+                if recv is not None:
+                    return recv[1]
+            time.sleep(0.05)
+            
+    
+    def send_msg_loop(self):
+        print("entered send_msg_loop")
+        while not self.stop_event.is_set():
+            with self.pending_messages_lock:
+                for msg_id, msg_status in list(self.pending_messages.items()):
+                    msg_tuple, is_sent, recv = msg_status
+                    if not is_sent:
+                        msg_type, data = msg_tuple
+                        try:
+                            print(f"sending message with msg_id={msg_id}, msg_type={msg_type}, data={data}")
+                            self.lobby_passer.send_args(Formats.MESSAGE, msg_id, msg_type, data)
+                            self.pending_messages[msg_id] = (msg_tuple, True, recv)
+                        except Exception as e:
+                            print(f"[PLAYERCLIENT] Exception occurred in send_msg_loop: {e}")
+            time.sleep(0.1)
+        print("exited send_msg_loop")
+
+    def recv_msg_loop(self):
+        print("entered recv_msg_loop")
+        while not self.stop_event.is_set():
+            try:
+                msg_id, msg_type, data = self.lobby_passer.receive_args(Formats.MESSAGE)
+                assert type(msg_id) == str and type(msg_type) == str and type(data) == dict
+                match msg_type:
+                    case Words.MessageType.RESPONSE:
+                        responding_id = data[Words.DataKeys.Response.RESPONDING_ID]
+                        with self.pending_messages_lock:
+                            msg_tuple, is_sent, _ = self.pending_messages[responding_id]
+                            self.pending_messages[responding_id] = (msg_tuple, is_sent, (msg_type, data))
+                    case _:
+                        print(f"[PLAYERCLIENT] received unknown msg_type in recv_msg_loop: {msg_type}")
+            except TimeoutError:
+                continue
+            except Exception as e:
+                print(f"[PLAYERCLIENT] Exception occurred in recv_msg_loop: {e}")
+        print("exited recv_msg_loop")
 
     def run(self):
         if not self.connect():
@@ -115,23 +173,24 @@ class PlayerClient:
             except Exception as e:
                 print(f"[PlayerClient] exception raised when calling on_connection_done(): {e}")
 
+        self.lobby_passer.settimeout(self.receive_timeout)
+        self.receive_msg_thread = threading.Thread(target=self.recv_msg_loop)
+        self.receive_msg_thread.start()
+
         print("[PlayerClient] enter main loop")
+        self.send_msg_loop()
+
         try:
-            while not self.stop_event.is_set():
-                # TODO: 實作接收/處理訊息
-                time.sleep(0.1)
-        finally:
-            try:
-                self.reset_lobby_passer()
-            except Exception:
-                pass
-            print("[PlayerClient] stopped")
+            self.reset_lobby_passer()
+        except Exception:
+            pass
+        print("[PlayerClient] stopped")
 
     def start(self):
         if self.thread and self.thread.is_alive():
             return
         self.stop_event.clear()
-        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread = threading.Thread(target=self.run)
         self.thread.start()
 
     def stop(self):

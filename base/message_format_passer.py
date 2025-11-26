@@ -34,9 +34,18 @@ class MessageFormatPasser:
 
     def send_args(self, msgfmt: MessageFormat, *args) -> None:
         json_data = msgfmt.to_json(*args)
+        encoded = json_data.encode('utf-8')
+        self.send_raw(encoded)
+        # sending_data = struct.pack('!I', len(encoded)) + encoded
+        # print(f"Sending message: {sending_data}")
+        # with self.send_lock:
+        #     self.sock.sendall(sending_data)
+
+    def send_raw(self, data: bytes) -> None:
+        """Send raw bytes with 4-byte length prefix"""
         # Prefix the JSON data with its length (4 bytes, network byte order)
-        sending_data = struct.pack('!I', len(json_data)) + json_data.encode('utf-8')
-        print(f"Sending message: {sending_data}")
+        sending_data = struct.pack('!I', len(data)) + data
+        print(f"Sending raw data: {sending_data}")
         with self.send_lock:
             self.sock.sendall(sending_data)
 
@@ -56,23 +65,33 @@ class MessageFormatPasser:
         return data
 
     def receive_args(self, msgfmt: MessageFormat) -> list:
+        json_data = self.receive_raw().decode("utf-8")
+        # self.settimeout(temp_timeout)
+        # print(f"Received message: {json_data}")
+        return msgfmt.to_arg_list(json_data)
+    
+    def receive_raw(self) -> bytes:
+        """Receive 4-byte length-prefixed raw bytes"""
+        # print("Entered receive_raw")
+
         # Read the prefix (exactly 4 bytes) to determine the length of the incoming message
         length_prefix = self.read_exactly(4)
-        #print(f"Received length prefix: {length_prefix}")
+        print(f"received length_prefix: {length_prefix}")
         if not length_prefix:
             raise ConnectionError("Connection closed")
         message_length = struct.unpack('!I', length_prefix)[0]
-        #print(f"Message length: {message_length}")
         if message_length <= 0:
             raise ValueError("Received message with non-positive length")
         elif message_length > LENGTH_LIMIT:
             raise ValueError("Received message exceeds length limit")
         
-        # Now read the actual message data
-        self.sock.settimeout(None)
-        json_data = self.read_exactly(message_length).decode("utf-8")
-        print(f"Received message: {json_data}")
-        return msgfmt.to_arg_list(json_data)
+        # Now read the actual raw data
+        temp_timeout = self.timeout
+        self.settimeout(None)
+        raw_data = self.read_exactly(message_length)
+        print(f"received raw_data: {raw_data}")
+        self.settimeout(temp_timeout)
+        return raw_data
     
     def close(self) -> None:
         self.sock.close()
