@@ -89,8 +89,17 @@ class PlayerClient:
                 time.sleep(1)
         return False
     
-    def try_login(self, username: str, password: str) -> tuple[bool, dict]:
-        return (False, {})
+    def try_login(self, username: str, password: str, timeout: Optional[float] = None) -> tuple[bool, dict]:
+        response = self.pend_and_wait({
+            Words.DataKeys.Request.COMMAND: Words.Command.LOGIN, 
+            Words.DataKeys.PARAMS: {
+                Words.ParamKeys.Login.USERNAME: username, 
+                Words.ParamKeys.Login.PASSWORD: password
+            }
+        }, timeout)
+        if response[Words.DataKeys.Response.RESULT] != Words.Result.SUCCESS:
+            return (False, response[Words.DataKeys.PARAMS])
+        return (True, {})
     
     def pend_request(self, data: dict) -> str:
         message_id = str(uuid.uuid4())
@@ -98,18 +107,28 @@ class PlayerClient:
             self.pending_messages[message_id] = ((Words.MessageType.REQUEST, data), False, None)
         return message_id
     
-    def wait_response(self, message_id: str, timeout: Optional[float] = None) -> Optional[dict]:
-        deadline = time.monotonic() + (timeout if timeout is not None else float('inf'))
-        while not self.stop_event.is_set and time.monotonic() < deadline:
+    def wait_response(self, message_id: str, timeout: Optional[float] = None) -> dict:
+        st = time.monotonic()
+        deadline = st + (timeout if timeout is not None else float('inf'))
+        # print(f"in wait_response. deadline={deadline}, time.monotonic()={st}")
+        while not self.stop_event.is_set() and time.monotonic() < deadline:
+            
             with self.pending_messages_lock:
                 entry = self.pending_messages[message_id]
-                if entry is None:
-                    return None
                 _, _, recv = entry
                 if recv is not None:
+                    del self.pending_messages[message_id]
                     return recv[1]
             time.sleep(0.05)
+
+        with self.pending_messages_lock:
+            del self.pending_messages[message_id]
+
+        raise TimeoutError("timeout expired")
             
+    def pend_and_wait(self, data: dict, timeout: Optional[float] = None) -> dict:
+        message_id = self.pend_request(data)
+        return self.wait_response(message_id, timeout)
     
     def send_msg_loop(self):
         print("entered send_msg_loop")
@@ -120,7 +139,7 @@ class PlayerClient:
                     if not is_sent:
                         msg_type, data = msg_tuple
                         try:
-                            print(f"sending message with msg_id={msg_id}, msg_type={msg_type}, data={data}")
+                            # print(f"sending message with msg_id={msg_id}, msg_type={msg_type}, data={data}")
                             self.lobby_passer.send_args(Formats.MESSAGE, msg_id, msg_type, data)
                             self.pending_messages[msg_id] = (msg_tuple, True, recv)
                         except Exception as e:
@@ -141,11 +160,14 @@ class PlayerClient:
                             msg_tuple, is_sent, _ = self.pending_messages[responding_id]
                             self.pending_messages[responding_id] = (msg_tuple, is_sent, (msg_type, data))
                     case _:
-                        print(f"[PLAYERCLIENT] received unknown msg_type in recv_msg_loop: {msg_type}")
+                        print(f"[PlayerClient] received unknown msg_type in recv_msg_loop: {msg_type}")
             except TimeoutError:
                 continue
+            except ConnectionError as e:
+                print(f"[PlayerClient] ConnectionError occurred in recv_msg_loop: {e}, aborting client.")
+                self.stop_event.set()
             except Exception as e:
-                print(f"[PLAYERCLIENT] Exception occurred in recv_msg_loop: {e}")
+                print(f"[PlayerClient] Exception occurred in recv_msg_loop: {e}")
         print("exited recv_msg_loop")
 
     def run(self):

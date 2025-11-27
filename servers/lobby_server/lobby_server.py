@@ -2,6 +2,7 @@ import threading
 import socket
 from base.message_format_passer import MessageFormatPasser
 from protocols.protocols import Formats, Words
+from typing import Optional
 import time
 import uuid
 
@@ -63,6 +64,17 @@ class LobbyServer:
         server_thread.join()
         # game_servers_manager_thread.join()
 
+    def send_response(self, passer: MessageFormatPasser, responding_id: str, result: str, params: Optional[dict] = None) -> str:
+        message_id = str(uuid.uuid4())
+        data: dict[str, str | dict] = {
+            Words.DataKeys.Response.RESPONDING_ID: responding_id, 
+            Words.DataKeys.Response.RESULT: result
+        }
+        if params is not None:
+            data[Words.DataKeys.PARAMS] = params
+        passer.send_args(Formats.MESSAGE, message_id, Words.MessageType.RESPONSE, data)
+        return message_id
+
     def accept_connections(self) -> None:
         while not self.stop_event.is_set():
             try:
@@ -88,11 +100,12 @@ class LobbyServer:
                 print(f"[LOBBYSERVER] received message_type {message_type}, expected {Words.MessageType.HANDSHAKE}")
 
             if data[Words.DataKeys.Handshake.ROLE] == Words.Roles.PLAYER:
-                message_id = str(uuid.uuid4())
-                msgfmt_passer.send_args(Formats.MESSAGE, message_id, Words.MessageType.RESPONSE, {
-                    Words.DataKeys.Response.RESPONDING_ID: received_message_id, 
-                    Words.DataKeys.Response.RESULT: Words.Result.SUCCESS
-                })
+                # message_id = str(uuid.uuid4())
+                # msgfmt_passer.send_args(Formats.MESSAGE, message_id, Words.MessageType.RESPONSE, {
+                #     Words.DataKeys.Response.RESPONDING_ID: received_message_id, 
+                #     Words.DataKeys.Response.RESULT: Words.Result.SUCCESS
+                # })
+                self.send_response(msgfmt_passer, received_message_id, Words.Result.SUCCESS)
                 self.handle_player(msgfmt_passer)
             # if connection_type == Words.ConnectionType.CLIENT:
             #     self.handle_client(msgfmt_passer)
@@ -112,7 +125,14 @@ class LobbyServer:
         
         try:
             while not self.stop_event.is_set():
-                passer.receive_args(Formats.MESSAGE)
+                msg_id, msg_type, data = passer.receive_args(Formats.MESSAGE)
+                match msg_type:
+                    case Words.MessageType.REQUEST:
+                        cmd = data[Words.DataKeys.Request.COMMAND]
+                        match cmd:
+                            case Words.Command.LOGIN:
+                                # continue
+                                self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: 'suduiwee', '12': 345})
         except Exception as e:
             print(f"[LOBBYSERVER] exception raised in handle_player: {e}")
 

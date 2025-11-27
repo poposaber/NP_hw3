@@ -20,6 +20,7 @@ class MessageFormat:
     
     def to_arg_list(self, json_str: str) -> list:
         data_dict = json.loads(json_str)
+        # print(f"data_dict={data_dict}")
         result_list = []
         for key, tp in self.format.items():
             if key not in data_dict:

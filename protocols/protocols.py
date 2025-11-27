@@ -41,15 +41,23 @@ class Words:
         RESPONSE = 'response'
         EVENT = 'event'
         HANDSHAKE = 'handshake'
-    class RequestCommand:
-        WELCOME = 'welcome'
+    class Command:
+        LOGIN = 'login'
     class DataKeys:
+        PARAMS = 'params'
         class Handshake:
             ROLE = 'role'
         class Response:
             RESPONDING_ID = 'responding_id'
             RESULT = 'result'
-            PARAMS = 'params'
+        class Request:
+            COMMAND = 'command'
+    class ParamKeys:
+        class Login:
+            USERNAME = 'username'
+            PASSWORD = 'password'
+        class Failure:
+            REASON = 'reason'
     class Roles:
         PLAYER = 'player'
     class Result:
