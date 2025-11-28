@@ -41,8 +41,10 @@ class Words:
         RESPONSE = 'response'
         EVENT = 'event'
         HANDSHAKE = 'handshake'
+        HEARTBEAT = 'heartbeat'
     class Command:
         LOGIN = 'login'
+        EXIT = 'exit'
     class DataKeys:
         PARAMS = 'params'
         class Handshake:

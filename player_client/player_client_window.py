@@ -5,16 +5,19 @@ import time
 from typing import Optional
 from .player_client import PlayerClient
 
-LOGIN_TIMEOUT = 5.0
+
 
 class PlayerClientWindow:
+    LOGIN_TIMEOUT = 5.0
     def __init__(self, host = "127.0.0.1", port = 21354, max_connect_try_count = 5, max_handshake_try_count = 5, 
                  connect_timeout = 2.0, handshake_timeout = 2.0, receive_timeout = 1.0) -> None:
         # GUI 與 client 分離：建立 PlayerClient 實例
         self.client = PlayerClient(host=host, port=port, max_connect_try_count=max_connect_try_count, max_handshake_try_count=max_handshake_try_count, 
                                    connect_timeout=connect_timeout, handshake_timeout=handshake_timeout, receive_timeout=receive_timeout, 
                                    on_connection_done=self._on_client_connection_done, 
-                                   on_connection_fail=self._on_client_connection_fail)
+                                   on_connection_fail=self._on_client_connection_fail, 
+                                   on_connection_loss=self._on_client_connection_loss)
+        
         self.window_thread: Optional[threading.Thread] = None
         self.window_stop_event = threading.Event()
 
@@ -24,6 +27,10 @@ class PlayerClientWindow:
         self.app.title("Player Client")
         self.app.geometry("800x600")
         self.app.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        self._window_state = "login"
+
+        self.frame_dict: dict[str, tkinter.Widget] = {}
 
         # frame for login
         self.login_frame = customtkinter.CTkFrame(master=self.app, width=400, height=400)
@@ -44,6 +51,9 @@ class PlayerClientWindow:
         self.connect_state_text.place(relx=0.5, rely=0.35, anchor=tkinter.CENTER)
         self.reconnect_button = customtkinter.CTkButton(master=self.waiting_connect_frame, text="Reconnect", width=70, command=self.reconnect)
         # self.reconnect_button.place(relx=0.5, rely=0.65, anchor=tkinter.CENTER)
+
+        # self.frame_dict["waiting"] = self.waiting_connect_frame
+        self.frame_dict["login"] = self.login_frame
 
 
         self.waiting_connect_frame.place(relx=0.5, rely=0.5, anchor=tkinter.CENTER)
@@ -67,7 +77,19 @@ class PlayerClientWindow:
 
     def _on_client_connection_done_ui(self):
         self.waiting_connect_frame.place_forget()
-        self.login_frame.place(relx=0.5, rely=0.5, anchor=tkinter.CENTER)
+        f = self.frame_dict[self._window_state]
+        f.place(relx=0.5, rely=0.5, anchor=tkinter.CENTER)
+
+    def _on_client_connection_loss(self):
+        try:
+            self.app.after(0, self._on_client_connection_loss_ui)
+        except Exception:
+            pass
+    
+    def _on_client_connection_loss_ui(self):
+        f = self.frame_dict[self._window_state]
+        f.place_forget()
+        self.waiting_connect_frame.place(relx=0.5, rely=0.5, anchor=tkinter.CENTER)
 
     def set_lobby_connection(self, host: str, port: int, max_connect_try_count: int, max_handshake_try_count: int):
         # 若在運行中改變連線參數，需重新建立 client 或在 client 中支援動態更新
@@ -96,7 +118,7 @@ class PlayerClientWindow:
 
     def login_thread(self, username: str, password: str):
         try:
-            success, params = self.client.try_login(username, password, LOGIN_TIMEOUT)
+            success, params = self.client.try_login(username, password, self.LOGIN_TIMEOUT)
         except Exception as e:
             success, params = False, {'error': str(e)}
         try:
@@ -117,6 +139,7 @@ class PlayerClientWindow:
         self.client.start()
 
     def stop_client(self):
+        self.client.exit_server()
         self.client.stop()
 
     def on_close(self):

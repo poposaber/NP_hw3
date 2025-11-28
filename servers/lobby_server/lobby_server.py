@@ -7,12 +7,13 @@ import time
 import uuid
 
 class LobbyServer:
-    def __init__(self, host: str = "0.0.0.0", port: int = 21354, accept_timeout = 1.0, receive_timeout = 2.0) -> None:
+    def __init__(self, host: str = "0.0.0.0", port: int = 21354, accept_timeout = 1.0, receive_timeout = 1.0, handshake_timeout = 5.0) -> None:
         self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.host = host
         self.port = port
         self.accept_timeout = accept_timeout
         self.receive_timeout = receive_timeout
+        self.handshake_timeout = handshake_timeout
         self.connections: list[MessageFormatPasser] = []
         self.passer_player_dict: dict[MessageFormatPasser, str | None] = {}
         self.db_server_passer: MessageFormatPasser | None = None
@@ -95,22 +96,30 @@ class LobbyServer:
         """Check handshake and pass to corresponding methods."""
         try:
             #while True:
+            msgfmt_passer.settimeout(self.handshake_timeout)
             received_message_id, message_type, data = msgfmt_passer.receive_args(Formats.MESSAGE)
             if message_type != Words.MessageType.HANDSHAKE:
                 print(f"[LOBBYSERVER] received message_type {message_type}, expected {Words.MessageType.HANDSHAKE}")
 
-            if data[Words.DataKeys.Handshake.ROLE] == Words.Roles.PLAYER:
-                # message_id = str(uuid.uuid4())
-                # msgfmt_passer.send_args(Formats.MESSAGE, message_id, Words.MessageType.RESPONSE, {
-                #     Words.DataKeys.Response.RESPONDING_ID: received_message_id, 
-                #     Words.DataKeys.Response.RESULT: Words.Result.SUCCESS
-                # })
-                self.send_response(msgfmt_passer, received_message_id, Words.Result.SUCCESS)
-                self.handle_player(msgfmt_passer)
-            # if connection_type == Words.ConnectionType.CLIENT:
-            #     self.handle_client(msgfmt_passer)
-            # elif connection_type == Words.ConnectionType.DATABASE_SERVER:
-            #     self.handle_database_server(msgfmt_passer)
+            role = data[Words.DataKeys.Handshake.ROLE]
+            match role:
+                case Words.Roles.PLAYER:
+                    self.send_response(msgfmt_passer, received_message_id, Words.Result.SUCCESS)
+                    self.handle_player(msgfmt_passer)
+                case _:
+                    print(f"Unknown role: {role}")
+            # if data[Words.DataKeys.Handshake.ROLE] == Words.Roles.PLAYER:
+            #     # message_id = str(uuid.uuid4())
+            #     # msgfmt_passer.send_args(Formats.MESSAGE, message_id, Words.MessageType.RESPONSE, {
+            #     #     Words.DataKeys.Response.RESPONDING_ID: received_message_id, 
+            #     #     Words.DataKeys.Response.RESULT: Words.Result.SUCCESS
+            #     # })
+            #     self.send_response(msgfmt_passer, received_message_id, Words.Result.SUCCESS)
+            #     self.handle_player(msgfmt_passer)
+            # # if connection_type == Words.ConnectionType.CLIENT:
+            # #     self.handle_client(msgfmt_passer)
+            # # elif connection_type == Words.ConnectionType.DATABASE_SERVER:
+            # #     self.handle_database_server(msgfmt_passer)
             # else:
             #     print(f"Unknown connection type: {connection_type}")
         except Exception as e:
@@ -122,9 +131,9 @@ class LobbyServer:
 
     def handle_player(self, passer: MessageFormatPasser):
         self.passer_player_dict[passer] = None
-        
-        try:
-            while not self.stop_event.is_set():
+        passer.settimeout(self.receive_timeout)
+        while not self.stop_event.is_set():
+            try:
                 msg_id, msg_type, data = passer.receive_args(Formats.MESSAGE)
                 match msg_type:
                     case Words.MessageType.REQUEST:
@@ -133,8 +142,18 @@ class LobbyServer:
                             case Words.Command.LOGIN:
                                 # continue
                                 self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: 'suduiwee', '12': 345})
-        except Exception as e:
-            print(f"[LOBBYSERVER] exception raised in handle_player: {e}")
+                            case Words.Command.EXIT:
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS)
+                                time.sleep(5)
+                                break
+            except TimeoutError:
+                # print("timeout")
+                continue
+            except ConnectionError as e:
+                print(f"[LobbyServer] ConnectionError raised in handle_player: {e}")
+                break
+            except Exception as e:
+                print(f"[LobbyServer] exception raised in handle_player: {e}")
 
         del self.passer_player_dict[passer]
 
