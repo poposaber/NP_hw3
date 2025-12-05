@@ -1,4 +1,5 @@
 import threading, time
+from pathlib import Path
 def func():
     x = 0
     while x < 10:
@@ -9,7 +10,8 @@ def func():
 # t.start()
 
 a = {"1": 34, "2": 43}
-x = a["3"]
+x = a.get('3')
 print(x)
+print(Path(__file__).resolve().parents[1])
 
         

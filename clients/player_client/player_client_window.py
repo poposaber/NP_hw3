@@ -1,3 +1,5 @@
+# next: add heartbeat patience
+
 import customtkinter
 import tkinter
 import threading
@@ -5,15 +7,11 @@ import time
 from typing import Optional
 from .player_client import PlayerClient
 
-
-
 class PlayerClientWindow:
     LOGIN_TIMEOUT = 5.0
-    def __init__(self, host = "127.0.0.1", port = 21354, max_connect_try_count = 5, max_handshake_try_count = 5, 
-                 connect_timeout = 2.0, handshake_timeout = 2.0, receive_timeout = 1.0) -> None:
+    def __init__(self, host = "127.0.0.1", port = 21354) -> None:
         # GUI 與 client 分離：建立 PlayerClient 實例
-        self.client = PlayerClient(host=host, port=port, max_connect_try_count=max_connect_try_count, max_handshake_try_count=max_handshake_try_count, 
-                                   connect_timeout=connect_timeout, handshake_timeout=handshake_timeout, receive_timeout=receive_timeout, 
+        self.client = PlayerClient(host=host, port=port, 
                                    on_connection_done=self._on_client_connection_done, 
                                    on_connection_fail=self._on_client_connection_fail, 
                                    on_connection_loss=self._on_client_connection_loss)

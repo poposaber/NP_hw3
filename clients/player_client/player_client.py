@@ -6,11 +6,24 @@ from typing import Optional, Callable
 from base.message_format_passer import MessageFormatPasser
 from protocols.protocols import Formats, Words
 
+DEFAULT_MAX_CONNECT_TRY_COUNT = 5
+DEFAULT_MAX_HANDSHAKE_TRY_COUNT = 5
+DEFAULT_CONNECT_TIMEOUT = 2.0
+DEFAULT_HANDSHAKE_TIMEOUT = 3.0
+DEFAULT_RECEIVE_TIMEOUT = 1.0
+DEFAULT_HEARTBEAT_INTERVAL = 10.0
+DEFAULT_HEARTBEAT_PATIENCE = 3
+
+
 class PlayerClient:
     def __init__(self, host: str = "127.0.0.1", port: int = 21354,
-                 max_connect_try_count: int = 5, max_handshake_try_count: int = 5,
-                 connect_timeout = 2.0, handshake_timeout = 3.0, receive_timeout = 1.0, 
-                 heartbeat_interval = 10.0, 
+                 max_connect_try_count: int = DEFAULT_MAX_CONNECT_TRY_COUNT, 
+                 max_handshake_try_count: int = DEFAULT_MAX_HANDSHAKE_TRY_COUNT,
+                 connect_timeout = DEFAULT_CONNECT_TIMEOUT, 
+                 handshake_timeout = DEFAULT_HANDSHAKE_TIMEOUT, 
+                 receive_timeout = DEFAULT_RECEIVE_TIMEOUT, 
+                 heartbeat_interval = DEFAULT_HEARTBEAT_INTERVAL, 
+                 heartbeat_patience = DEFAULT_HEARTBEAT_PATIENCE, 
                  on_connection_done: Optional[Callable[[], None]] = None, 
                  on_connection_fail: Optional[Callable[[], None]] = None, 
                  on_connection_loss: Optional[Callable[[], None]] = None) -> None:
@@ -22,6 +35,7 @@ class PlayerClient:
         self.handshake_timeout = max(2.0, handshake_timeout)
         self.receive_timeout = max(0.25, receive_timeout)
         self.heartbeat_interval = max(2.0, heartbeat_interval)
+        self.heartbeat_patience = max(2, heartbeat_patience)
 
         self.lobby_passer = MessageFormatPasser()
 
@@ -153,6 +167,7 @@ class PlayerClient:
         now = time.monotonic()
         pre = now
         remain = self.heartbeat_interval
+        heartbeat_fail_count = 0
 
         while not self.stop_event.is_set() and not self.connection_loss_event.is_set():
             if remain <= 0:
@@ -165,10 +180,16 @@ class PlayerClient:
                         if Words.DataKeys.PARAMS in hb_result.keys():
                             error_message += f" with params: {hb_result[Words.DataKeys.PARAMS]}"
                         print(error_message)
+                        heartbeat_fail_count += 1
+                    else:
+                        heartbeat_fail_count = 0
                 except TimeoutError:
                     print("[PlayerClient] Heartbeat timeout expired")
+                    heartbeat_fail_count += 1
                 except Exception as e:
                     print(f"[PlayerClient] Exception occurred in heartbeat_loop: {e}")
+            if heartbeat_fail_count >= self.heartbeat_patience:
+                self.connection_loss_event.set()
             time.sleep(0.1)
             now = time.monotonic()
             remain -= now - pre
@@ -211,12 +232,6 @@ class PlayerClient:
             except ConnectionError as e:
                 print(f"[PlayerClient] ConnectionError occurred in recv_msg_loop: {e}")
                 self.connection_loss_event.set()
-                if self.on_connection_loss and not self.stop_event.is_set():
-                    print("Reconnecting...")
-                    try:
-                        self.on_connection_loss()
-                    except Exception as e:
-                        print(f"[PlayerClient] Exception occurrred executing self.on_connection_loss(): {e}")
             except Exception as e:
                 print(f"[PlayerClient] Exception occurred in recv_msg_loop: {e}")
         print("exited recv_msg_loop")
@@ -261,6 +276,14 @@ class PlayerClient:
             self.receive_msg_thread.join()
             self.heartbeat_thread.join()
             self.send_msg_thread.join()
+
+            if not self.stop_event.is_set() and self.connection_loss_event.is_set():
+                print("Reconnecting...")
+                if self.on_connection_loss:
+                    try:
+                        self.on_connection_loss()
+                    except Exception as e:
+                        print(f"[PlayerClient] Exception occurrred executing self.on_connection_loss(): {e}")
 
             try:
                 self.reset_lobby_passer()

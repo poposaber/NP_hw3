@@ -6,8 +6,15 @@ from typing import Optional
 import time
 import uuid
 
+DEFAULT_ACCEPT_TIMEOUT = 1.0
+DEFAULT_RECEIVE_TIMEOUT = 1.0
+DEFAULT_HANDSHAKE_TIMEOUT = 5.0
+
 class LobbyServer:
-    def __init__(self, host: str = "0.0.0.0", port: int = 21354, accept_timeout = 1.0, receive_timeout = 1.0, handshake_timeout = 5.0) -> None:
+    def __init__(self, host: str = "0.0.0.0", port: int = 21354, 
+                 accept_timeout = DEFAULT_ACCEPT_TIMEOUT, 
+                 receive_timeout = DEFAULT_RECEIVE_TIMEOUT, 
+                 handshake_timeout = DEFAULT_HANDSHAKE_TIMEOUT) -> None:
         self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.host = host
         self.port = port
@@ -146,6 +153,8 @@ class LobbyServer:
                                 self.send_response(passer, msg_id, Words.Result.SUCCESS)
                                 time.sleep(5)
                                 break
+                    case Words.MessageType.HEARTBEAT:
+                        self.send_response(passer, msg_id, Words.Result.SUCCESS)
             except TimeoutError:
                 # print("timeout")
                 continue
