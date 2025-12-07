@@ -12,6 +12,6 @@ def func():
 a = {"1": 34, "2": 43}
 x = a.get('3')
 print(x)
-print(Path(__file__).resolve().parents[1])
+print(Path(__file__).resolve().parents[0])
 
         

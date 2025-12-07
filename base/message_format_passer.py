@@ -45,7 +45,7 @@ class MessageFormatPasser:
         """Send raw bytes with 4-byte length prefix"""
         # Prefix the JSON data with its length (4 bytes, network byte order)
         sending_data = struct.pack('!I', len(data)) + data
-        print(f"Sending raw data: {sending_data}")
+        print(f"\nSending raw data: {sending_data}")
         with self.send_lock:
             self.sock.sendall(sending_data)
 
@@ -54,14 +54,17 @@ class MessageFormatPasser:
         data = b""
         with self.receive_lock:
             data = self.sock.recv(num_bytes)
-            temp_timeout = self.timeout
-            self.settimeout(None)
+            # temp_timeout = self.timeout
+            # self.settimeout(None)
             while len(data) < num_bytes:
-                chunk = self.sock.recv(num_bytes - len(data))
+                try:
+                    chunk = self.sock.recv(num_bytes - len(data))
+                except socket.timeout:
+                    raise TimeoutError("recv timeout") from None
                 if not chunk:
                     raise ConnectionError("Connection closed")
                 data += chunk
-            self.settimeout(temp_timeout)
+            # self.settimeout(temp_timeout)
         return data
 
     def receive_args(self, msgfmt: MessageFormat) -> list:
@@ -76,7 +79,7 @@ class MessageFormatPasser:
 
         # Read the prefix (exactly 4 bytes) to determine the length of the incoming message
         length_prefix = self.read_exactly(4)
-        print(f"received length_prefix: {length_prefix}")
+        print(f"\nreceived length_prefix: {length_prefix}")
         if not length_prefix:
             raise ConnectionError("Connection closed")
         message_length = struct.unpack('!I', length_prefix)[0]
@@ -86,13 +89,21 @@ class MessageFormatPasser:
             raise ValueError("Received message exceeds length limit")
         
         # Now read the actual raw data
-        temp_timeout = self.timeout
-        self.settimeout(None)
+        # temp_timeout = self.timeout
+        # self.settimeout(None)
         raw_data = self.read_exactly(message_length)
         print(f"received raw_data: {raw_data}")
-        self.settimeout(temp_timeout)
+        # self.settimeout(temp_timeout)
         return raw_data
     
     def close(self) -> None:
-        self.sock.close()
+        try:
+            # Unblock any pending recv/send immediately
+            try:
+                self.sock.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            self.sock.close()
+        except Exception:
+            pass
 

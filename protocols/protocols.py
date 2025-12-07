@@ -21,6 +21,7 @@ class Words:
         HEARTBEAT = 'heartbeat'
     class Command:
         LOGIN = 'login'
+        REGISTER = 'register'
         EXIT = 'exit'
     class DataKeys:
         PARAMS = 'params'
@@ -33,6 +34,9 @@ class Words:
             COMMAND = 'command'
     class ParamKeys:
         class Login:
+            USERNAME = 'username'
+            PASSWORD = 'password'
+        class Register:
             USERNAME = 'username'
             PASSWORD = 'password'
         class Failure:

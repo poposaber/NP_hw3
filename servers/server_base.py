@@ -27,7 +27,7 @@ class ServerBase:
         # self.db_server_passer: MessageFormatPasser | None = None
         self.stop_event = threading.Event()
         # self.pending_db_response_dict: dict[str, tuple[bool, str, dict]] = {}
-        """The dict contains all sent db_requests, after processing, received responses will be popped. {request_id: (response_received, result, data)}"""
+        # """The dict contains all sent db_requests, after processing, received responses will be popped. {request_id: (response_received, result, data)}"""
         # self.pending_db_response_lock = threading.Lock()
         # self.invitee_inviter_set_pair: set[tuple] = set()  # {(invitee_username, inviter_username)}
         # self.invitation_lock = threading.Lock()

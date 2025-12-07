@@ -1,4 +1,5 @@
-# next: supply only two connection, one from lobby server, one from developer server 
+# next: 
+# supply only two connection, one from lobby server, one from developer server 
 
 import threading
 import socket
@@ -15,11 +16,17 @@ DEFAULT_ACCEPT_TIMEOUT = 1.0
 DEFAULT_RECEIVE_TIMEOUT = 1.0
 DEFAULT_HANDSHAKE_TIMEOUT = 5.0
 
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"  # parents[0]=current dir, parents[1]=上一層, parents[2]=上二層
+PARENT_DIR = Path(__file__).resolve().parents[0]
+
+DATA_DIR = PARENT_DIR / "data"  # parents[0]=current dir, parents[1]=上一層, parents[2]=上二層
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-USER_DB_FILE = DATA_DIR / "user_db.json"
+PLAYER_DB_FILE = DATA_DIR / "player_db.json"
 ROOM_DB_FILE = DATA_DIR / "room_db.json"
+
+DEVELOPER_DB_FILE = DATA_DIR / "developer_db.json"
+
+GAME_FOLDER = PARENT_DIR / "games"
 
 class DatabaseServer:
     def __init__(self, host: str = "0.0.0.0", port: int = 32132, 
@@ -38,34 +45,53 @@ class DatabaseServer:
         self.lobby_passer: Optional[MessageFormatPasser] = None
         self.developer_passer: Optional[MessageFormatPasser] = None
 
-        self.user_db = self.load_user_db()
+        self.player_db = self.load_player_db()
+        self.developer_db = self.load_developer_db()
         self.room_db = self.load_room_db()
 
-    def load_user_db(self):
-        if not os.path.exists(USER_DB_FILE):
+    def load_db(self, path: Path):
+        if not os.path.exists(path):
             return {}
-        with open(USER_DB_FILE, 'r') as f:
+        with open(path, 'r') as f:
             return json.load(f)
+    
+    def save_db(self, path: Path, data: dict):
+        with open(path, 'w') as f:
+            json.dump(data, f, indent=2)
+
+    def load_player_db(self):
+        return self.load_db(PLAYER_DB_FILE)
         
-    def save_user_db(self):
-        with open(USER_DB_FILE, 'w') as f:
-            json.dump(self.user_db, f, indent=2)
+    def save_player_db(self):
+        self.save_db(PLAYER_DB_FILE, self.player_db)
+
+    def load_developer_db(self):
+        return self.load_db(DEVELOPER_DB_FILE)
+        
+    def save_developer_db(self):
+        self.save_db(DEVELOPER_DB_FILE, self.developer_db)
 
     def load_room_db(self):
-        if not os.path.exists(ROOM_DB_FILE):
-            return {}
-        with open(ROOM_DB_FILE, 'r') as f:
-            return json.load(f)
-
+        return self.load_db(ROOM_DB_FILE)
+        
     def save_room_db(self):
-        with open(ROOM_DB_FILE, 'w') as f:
-            json.dump(self.room_db, f, indent=2)
+        self.save_db(ROOM_DB_FILE, self.room_db)
+
+    # def load_room_db(self):
+    #     if not os.path.exists(ROOM_DB_FILE):
+    #         return {}
+    #     with open(ROOM_DB_FILE, 'r') as f:
+    #         return json.load(f)
+
+    # def save_room_db(self):
+    #     with open(ROOM_DB_FILE, 'w') as f:
+    #         json.dump(self.room_db, f, indent=2)
 
     def run(self):
         self.server_sock.bind((self.host, self.port))
         self.server_sock.listen(5)
         self.server_sock.settimeout(self.accept_timeout)
-        print(f"Lobby server listening on {self.host}:{self.port}")
+        print(f"Database server listening on {self.host}:{self.port}")
         self.accept_connections()
 
     def accept_connections(self) -> None:
@@ -83,6 +109,8 @@ class DatabaseServer:
                 
             except socket.timeout:
                 continue
+            except Exception as e:
+                print(f"[DatabaseServer] Exception in accept_connections: {e}")
     
     def handle_connections(self, msgfmt_passer: MessageFormatPasser) -> None:
         """Check handshake and pass to corresponding methods."""
@@ -91,7 +119,7 @@ class DatabaseServer:
             msgfmt_passer.settimeout(self.handshake_timeout)
             received_message_id, message_type, data = msgfmt_passer.receive_args(Formats.MESSAGE)
             if message_type != Words.MessageType.HANDSHAKE:
-                print(f"[LOBBYSERVER] received message_type {message_type}, expected {Words.MessageType.HANDSHAKE}")
+                print(f"[DatabaseServer] received message_type {message_type}, expected {Words.MessageType.HANDSHAKE}")
 
             role = data[Words.DataKeys.Handshake.ROLE]
             match role:
@@ -100,8 +128,12 @@ class DatabaseServer:
                         self.lobby_passer = msgfmt_passer
                         self.send_response(msgfmt_passer, received_message_id, Words.Result.SUCCESS)
                         self.handle_lobby(msgfmt_passer)
+                        self.lobby_passer.close()
+                        self.lobby_passer = None
+
                     else:
-                        self.send_response(msgfmt_passer, received_message_id, Words.Result.FAILURE)
+                        self.send_response(msgfmt_passer, received_message_id, Words.Result.FAILURE, 
+                                           {Words.ParamKeys.Failure.REASON: "already connected one lobby server"})
                 case _:
                     print(f"Unknown role: {role}")
             # if data[Words.DataKeys.Handshake.ROLE] == Words.Roles.PLAYER:
@@ -119,7 +151,7 @@ class DatabaseServer:
             # else:
             #     print(f"Unknown connection type: {connection_type}")
         except Exception as e:
-            print(f"Error during handshake: {e}")
+            print(f"Error during handle_connections: {e}")
 
         # self.connections.remove(msgfmt_passer)
         # print(f"Connection closed. Active connections: {len(self.connections)}")
@@ -132,13 +164,88 @@ class DatabaseServer:
                 msg_id, msg_type, data = passer.receive_args(Formats.MESSAGE)
                 match msg_type:
                     case Words.MessageType.REQUEST:
+                        assert isinstance(data, dict)
+                        cmd = data.get(Words.DataKeys.Request.COMMAND)
+                        params = data.get(Words.DataKeys.PARAMS)
+                        match cmd:
+                            case Words.Command.LOGIN:
+                                # time.sleep(10)
+                                assert isinstance(params, dict)
+                                username = params.get(Words.ParamKeys.Login.USERNAME)
+                                password = params.get(Words.ParamKeys.Login.PASSWORD)
+                                if not username:
+                                    self.send_response(self.lobby_passer, msg_id, Words.Result.FAILURE, 
+                                                       {Words.ParamKeys.Failure.REASON: "Missing username."})
+                                    continue
+                                if not password:
+                                    self.send_response(self.lobby_passer, msg_id, Words.Result.FAILURE, 
+                                                       {Words.ParamKeys.Failure.REASON: "Missing password."})
+                                    continue
+                                if self._verify_player_credential(username, password):
+                                    self._set_online(username)
+                                    self.send_response(self.lobby_passer, msg_id, Words.Result.SUCCESS)
+                                else:
+                                    self.send_response(self.lobby_passer, msg_id, Words.Result.FAILURE, 
+                                                       {Words.ParamKeys.Failure.REASON: "Incorrect username or password."})
+                            case Words.Command.REGISTER:
+                                assert isinstance(params, dict)
+                                username = params.get(Words.ParamKeys.Register.USERNAME)
+                                password = params.get(Words.ParamKeys.Register.PASSWORD)
+                                if not username:
+                                    self.send_response(self.lobby_passer, msg_id, Words.Result.FAILURE, 
+                                                       {Words.ParamKeys.Failure.REASON: "Missing username."})
+                                    continue
+                                if not password:
+                                    self.send_response(self.lobby_passer, msg_id, Words.Result.FAILURE, 
+                                                       {Words.ParamKeys.Failure.REASON: "Missing password."})
+                                    continue
+                                if self._verify_regable(username):
+                                    self.write_player_data(username, password)
+                                    self.send_response(self.lobby_passer, msg_id, Words.Result.SUCCESS)
+                                else:
+                                    self.send_response(self.lobby_passer, msg_id, Words.Result.FAILURE, 
+                                                       {Words.ParamKeys.Failure.REASON: "Username used by others"})
+
+                            case _:
+                                self.send_response(self.lobby_passer, msg_id, Words.Result.FAILURE, 
+                                                   {Words.ParamKeys.Failure.REASON: "Invalid command"})
+                    case Words.MessageType.HEARTBEAT:
+                        self.send_response(passer, msg_id, Words.Result.SUCCESS)   
+                    case _:
                         pass
+
             except TimeoutError:
                 continue
+            except ConnectionError as e:
+                print(f"[DatabaseServer] ConnectionError raised in handle_lobby: {e}")
+                break
             except Exception as e:
                 print(f"[DatabaseServer] Exception occurred in handle_lobby: {e}")
 
-        
+    def _verify_player_credential(self, username, password) -> bool:
+        record = self.player_db.get(username)
+        if not record:
+            return False
+        if isinstance(record, dict):
+            correct_password = record.get("password")
+        else:
+            correct_password = record
+        return password == correct_password
+    
+    def _verify_regable(self, username) -> bool:
+        return not username in self.player_db.keys()
+    
+    def _set_online(self, username):
+        self.player_db[username]["last_login_time"] = time.time()
+        self.save_player_db()
+
+    def write_player_data(self, username: str, password: str):
+        self.player_db[username] = {
+            "password": password, 
+            "create_time": time.time(), 
+            "last_login_time": None
+        }
+        self.save_player_db()
 
     def start(self) -> None:
         server_thread = threading.Thread(target=self.run)
@@ -150,20 +257,46 @@ class DatabaseServer:
             while True:
                 cmd = input("Enter 'stop' to stop the server: ")
                 if cmd == 'stop':
-                    self.stop_event.set()
-                    # with self.game_server_lock:
-                    #     for game_server in self.game_servers.values():
-                    #         game_server.stop()
+                    self.stop()
                     break
                 else:
                     print("invalid command.")
         except KeyboardInterrupt:
-            self.stop_event.set()
+            self.stop()
             # with self.game_server_lock:
             #     for game_server in self.game_servers.values():
             #         game_server.stop()
 
         server_thread.join()
+
+        self.save_player_db()
+        self.save_room_db()
+        self.save_developer_db()
+
+    def stop(self):
+        self.stop_event.set()
+
+        try:
+            self.server_sock.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
+        try:
+            self.server_sock.close()
+        except Exception:
+            pass
+
+        if self.lobby_passer:
+            try:
+                self.lobby_passer.close()
+            except Exception:
+                pass
+
+        if self.developer_passer:
+            try:
+                self.developer_passer.close()
+            except Exception:
+                pass
+        
 
     def send_response(self, passer: MessageFormatPasser, responding_id: str, result: str, params: Optional[dict] = None) -> str:
         message_id = str(uuid.uuid4())
