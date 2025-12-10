@@ -92,7 +92,7 @@ class PeerWorker:
                     _, _, recv = entry
                     if recv is not None:
                         del self.pending_messages[message_id]
-                        return recv[1]
+                        return recv[1] # {responding_id: ..., result: ..., params: ...}
                 
             time.sleep(0.05)
 

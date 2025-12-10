@@ -15,6 +15,7 @@ from pathlib import Path
 DEFAULT_ACCEPT_TIMEOUT = 1.0
 DEFAULT_RECEIVE_TIMEOUT = 1.0
 DEFAULT_HANDSHAKE_TIMEOUT = 5.0
+DEFAULT_HEARTBEAT_TIMEOUT = 30.0
 
 PARENT_DIR = Path(__file__).resolve().parents[0]
 
@@ -32,13 +33,15 @@ class DatabaseServer:
     def __init__(self, host: str = "0.0.0.0", port: int = 32132, 
                  accept_timeout = DEFAULT_ACCEPT_TIMEOUT, 
                  receive_timeout = DEFAULT_RECEIVE_TIMEOUT, 
-                 handshake_timeout = DEFAULT_HANDSHAKE_TIMEOUT):
+                 handshake_timeout = DEFAULT_HANDSHAKE_TIMEOUT, 
+                 heartbeat_timeout = DEFAULT_HEARTBEAT_TIMEOUT):
         self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.host = host
         self.port = port
         self.accept_timeout = accept_timeout
         self.receive_timeout = receive_timeout
         self.handshake_timeout = handshake_timeout
+        self.heartbeat_timeout = heartbeat_timeout
 
         self.stop_event = threading.Event()
 
@@ -159,6 +162,7 @@ class DatabaseServer:
 
     def handle_lobby(self, passer: MessageFormatPasser):
         passer.settimeout(self.receive_timeout)
+        last_hb_time = time.time()
         while not self.stop_event.is_set():
             try:
                 msg_id, msg_type, data = passer.receive_args(Formats.MESSAGE)
@@ -173,77 +177,106 @@ class DatabaseServer:
                                 assert isinstance(params, dict)
                                 username = params.get(Words.ParamKeys.Login.USERNAME)
                                 password = params.get(Words.ParamKeys.Login.PASSWORD)
+                                
+                                success, reason = self._verify_player_credential(username, password)
+                                if success:
+                                    assert username is not None
+                                    self._set_online(username)
+                                    self.send_response(passer, msg_id, Words.Result.SUCCESS)
+                                else:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, 
+                                                       {Words.ParamKeys.Failure.REASON: reason})
+                            case Words.Command.LOGOUT:
+                                assert isinstance(params, dict)
+                                username = params.get(Words.ParamKeys.Logout.USERNAME)
                                 if not username:
-                                    self.send_response(self.lobby_passer, msg_id, Words.Result.FAILURE, 
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, 
                                                        {Words.ParamKeys.Failure.REASON: "Missing username."})
                                     continue
-                                if not password:
-                                    self.send_response(self.lobby_passer, msg_id, Words.Result.FAILURE, 
-                                                       {Words.ParamKeys.Failure.REASON: "Missing password."})
-                                    continue
-                                if self._verify_player_credential(username, password):
-                                    self._set_online(username)
-                                    self.send_response(self.lobby_passer, msg_id, Words.Result.SUCCESS)
-                                else:
-                                    self.send_response(self.lobby_passer, msg_id, Words.Result.FAILURE, 
-                                                       {Words.ParamKeys.Failure.REASON: "Incorrect username or password."})
+                                self._set_offline(username)
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS)
                             case Words.Command.REGISTER:
                                 assert isinstance(params, dict)
                                 username = params.get(Words.ParamKeys.Register.USERNAME)
                                 password = params.get(Words.ParamKeys.Register.PASSWORD)
                                 if not username:
-                                    self.send_response(self.lobby_passer, msg_id, Words.Result.FAILURE, 
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, 
                                                        {Words.ParamKeys.Failure.REASON: "Missing username."})
                                     continue
                                 if not password:
-                                    self.send_response(self.lobby_passer, msg_id, Words.Result.FAILURE, 
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, 
                                                        {Words.ParamKeys.Failure.REASON: "Missing password."})
                                     continue
                                 if self._verify_regable(username):
                                     self.write_player_data(username, password)
-                                    self.send_response(self.lobby_passer, msg_id, Words.Result.SUCCESS)
+                                    self.send_response(passer, msg_id, Words.Result.SUCCESS)
                                 else:
-                                    self.send_response(self.lobby_passer, msg_id, Words.Result.FAILURE, 
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, 
                                                        {Words.ParamKeys.Failure.REASON: "Username used by others"})
 
                             case _:
-                                self.send_response(self.lobby_passer, msg_id, Words.Result.FAILURE, 
+                                self.send_response(passer, msg_id, Words.Result.FAILURE, 
                                                    {Words.ParamKeys.Failure.REASON: "Invalid command"})
                     case Words.MessageType.HEARTBEAT:
+                        last_hb_time = time.time()
                         self.send_response(passer, msg_id, Words.Result.SUCCESS)   
                     case _:
-                        pass
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, 
+                                            {Words.ParamKeys.Failure.REASON: "Invalid command"})
 
             except TimeoutError:
+                if time.time() - last_hb_time > self.heartbeat_timeout:
+                    print(f"[LobbyServer] client heartbeat timeout (>{self.heartbeat_timeout}s), terminating connection")
+                    break
                 continue
             except ConnectionError as e:
                 print(f"[DatabaseServer] ConnectionError raised in handle_lobby: {e}")
                 break
             except Exception as e:
+                self.send_response(passer, msg_id, Words.Result.FAILURE, 
+                                            {Words.ParamKeys.Failure.REASON: "Error occurred in database server."})
                 print(f"[DatabaseServer] Exception occurred in handle_lobby: {e}")
 
-    def _verify_player_credential(self, username, password) -> bool:
+    def _verify_player_credential(self, username, password) -> tuple[bool, str]:
+        if not username:
+            return (False, "Missing username.")
+        if not password:
+            return (False, "Missing password.")
+        
         record = self.player_db.get(username)
+
         if not record:
-            return False
+            return (False, "Incorrect username or password.")
         if isinstance(record, dict):
             correct_password = record.get("password")
         else:
             correct_password = record
-        return password == correct_password
+        if password == correct_password:
+            if not record.get("online"):
+                return (True, "")
+            else:
+                return (False, "Account using by other clients")
+        else:
+            return (False, "Incorrect username or password.")
     
     def _verify_regable(self, username) -> bool:
         return not username in self.player_db.keys()
     
-    def _set_online(self, username):
+    def _set_online(self, username: str):
         self.player_db[username]["last_login_time"] = time.time()
+        self.player_db[username]["online"] = True
+        self.save_player_db()
+
+    def _set_offline(self, username):
+        self.player_db[username]["online"] = False
         self.save_player_db()
 
     def write_player_data(self, username: str, password: str):
         self.player_db[username] = {
             "password": password, 
             "create_time": time.time(), 
-            "last_login_time": None
+            "last_login_time": None, 
+            "online": False
         }
         self.save_player_db()
 
@@ -259,6 +292,8 @@ class DatabaseServer:
                 if cmd == 'stop':
                     self.stop()
                     break
+                elif cmd == 'resetplayer':
+                    self.reset_player()
                 else:
                     print("invalid command.")
         except KeyboardInterrupt:
@@ -272,6 +307,13 @@ class DatabaseServer:
         self.save_player_db()
         self.save_room_db()
         self.save_developer_db()
+
+    def reset_player(self):
+        for username in self.player_db.keys():
+            self.player_db[username]["online"] = False
+        self.save_player_db()
+
+            
 
     def stop(self):
         self.stop_event.set()
