@@ -19,8 +19,8 @@ DEFAULT_DB_RESPONSE_TIMEOUT = 3.0
 DEFAULT_CLIENT_HEARTBEAT_TIMEOUT = 30.0
 
 
-class LobbyServer(ServerBase):
-    def __init__(self, host: str = "0.0.0.0", port: int = 21354, 
+class DeveloperServer(ServerBase):
+    def __init__(self, host: str = "0.0.0.0", port: int = 21355, 
                  db_host: str = "127.0.0.1", db_port: int = 32132, 
                  accept_timeout = DEFAULT_ACCEPT_TIMEOUT, 
                  connect_timeout = DEFAULT_CONNECT_TIMEOUT, 
@@ -31,7 +31,7 @@ class LobbyServer(ServerBase):
                  db_heartbeat_interval = DEFAULT_DB_HEARTBEAT_INTERVAL, 
                  db_heartbeat_patience = DEFAULT_DB_HEARTBEAT_PATIENCE, 
                  client_heartbeat_timeout = DEFAULT_CLIENT_HEARTBEAT_TIMEOUT) -> None:
-        super().__init__(host, port, db_host, db_port, Words.Roles.LOBBYSERVER, 
+        super().__init__(host, port, db_host, db_port, Words.Roles.DEVELOPERSERVER, 
                          accept_timeout, connect_timeout, receive_timeout, handshake_timeout, 
                          db_response_timeout, max_handshake_try_count, db_heartbeat_interval, 
                          db_heartbeat_patience, client_heartbeat_timeout)
@@ -50,7 +50,7 @@ class LobbyServer(ServerBase):
         # self.db_heartbeat_patience = db_heartbeat_patience
         # self.client_heartbeat_timeout = client_heartbeat_timeout
         # self.connections: list[MessageFormatPasser] = []
-        self.passer_player_dict: dict[MessageFormatPasser, str | None] = {}
+        self.passer_developer_dict: dict[MessageFormatPasser, str | None] = {}
 
         # self.db_passer: MessageFormatPasser | None = None
         # self.db_worker: Optional[PeerWorker] = None
@@ -88,16 +88,16 @@ class LobbyServer(ServerBase):
     #     attempt = 1
     #     while not self.stop_event.is_set():
     #         try:
-    #             print(f"[LobbyServer] connect attempt {attempt} -> {self.db_host}:{self.db_port}")
+    #             print(f"[DeveloperServer] connect attempt {attempt} -> {self.db_host}:{self.db_port}")
     #             self.reset_db_passer()
     #             assert self.db_passer is not None
     #             self.db_passer.settimeout(self.connect_timeout)
     #             self.db_passer.connect(self.db_host, self.db_port)
-    #             print("[LobbyServer] connected")
+    #             print("[DeveloperServer] connected")
     #             return True
     #         except Exception as e:
     #             attempt += 1
-    #             print(f"[LobbyServer] connect failed: {e}, retrying...")
+    #             print(f"[DeveloperServer] connect failed: {e}, retrying...")
                 
                 
     #     return False
@@ -106,38 +106,38 @@ class LobbyServer(ServerBase):
     #     attempt = 1
     #     while attempt <= self.max_handshake_try_count and not self.stop_event.is_set():
     #         try:
-    #             print(f"[LobbyServer] handshake attempt {attempt}")
+    #             print(f"[DeveloperServer] handshake attempt {attempt}")
     #             # 呼叫 send_args 或其他 handshake 流程
     #             assert self.db_passer is not None
     #             self.db_passer.settimeout(self.handshake_timeout)
     #             message_id = str(uuid.uuid4())
     #             self.db_passer.send_args(Formats.MESSAGE, message_id, Words.MessageType.HANDSHAKE, 
-    #                                         {Words.DataKeys.Handshake.ROLE: Words.Roles.LOBBYSERVER})
+    #                                         {Words.DataKeys.Handshake.ROLE: Words.Roles.DeveloperServer})
                 
     #             _, message_type, data = self.db_passer.receive_args(Formats.MESSAGE)
     #             if message_type != Words.MessageType.RESPONSE:
     #                 error_message = f"received message_type {message_type}, expected {Words.MessageType.RESPONSE}"
-    #                 # print(f"[LobbyServer] {error_message}")
+    #                 # print(f"[DeveloperServer] {error_message}")
     #                 raise Exception(error_message)
     #             responding_id = data[Words.DataKeys.Response.RESPONDING_ID]
     #             if responding_id != message_id:
     #                 error_message = f"received responding_id {responding_id}, expected {message_id}"
-    #                 # print(f"[LobbyServer] {error_message}")
+    #                 # print(f"[DeveloperServer] {error_message}")
     #                 raise Exception(error_message)
     #             result = data[Words.DataKeys.Response.RESULT]
     #             if result != Words.Result.SUCCESS:
     #                 error_message = f"received result {result}, expected {Words.Result.SUCCESS}."
     #                 if Words.DataKeys.PARAMS in data.keys():
     #                     error_message += f" params: {data[Words.DataKeys.PARAMS]}"
-    #                 # print(f"[LobbyServer] {error_message}")
+    #                 # print(f"[DeveloperServer] {error_message}")
     #                 raise Exception(error_message)
     #             return True
     #         except Exception as e:
     #             attempt += 1
     #             if attempt > self.max_handshake_try_count:
-    #                 print(f"[LobbyServer] handshake failed: {e}")
+    #                 print(f"[DeveloperServer] handshake failed: {e}")
     #                 continue
-    #             print(f"[LobbyServer] handshake failed: {e}, retrying...")
+    #             print(f"[DeveloperServer] handshake failed: {e}, retrying...")
     #             if not self.stop_event.is_set():
     #                 time.sleep(1)
     #     return False
@@ -153,10 +153,10 @@ class LobbyServer(ServerBase):
     #         #     msg_id, msg_type, data = msg_tuple
     #         #     # currently DB only sends RESPONSE; log others
     #         #     if msg_type != Words.MessageType.RESPONSE:
-    #         #         print(f"[LobbyServer] received unknown msg_type from DB: {msg_type}")
+    #         #         print(f"[DeveloperServer] received unknown msg_type from DB: {msg_type}")
 
     #         def on_db_lost():
-    #             print("[LobbyServer] DB connection lost")
+    #             print("[DeveloperServer] DB connection lost")
     #             # self.connection_to_db_loss_event.set()
 
     #         def make_db_hb():
@@ -187,13 +187,13 @@ class LobbyServer(ServerBase):
     #         self.reset_db_passer()
 
     #         if not self.stop_event.is_set() and self.db_worker.conn_loss_event.is_set():
-    #             print("[LobbyServer] Reconnecting to database server...")
+    #             print("[DeveloperServer] Reconnecting to database server...")
     #             # with self.pending_db_messages_lock:
     #             #     self.pending_db_messages.clear()
             
     #         # self.reset_db_passer()
 
-    #     print("[LobbyServer] stopped")
+    #     print("[DeveloperServer] stopped")
 
     # def run(self):
     #     self.interact_to_db_thread = threading.Thread(target=self.interact_to_db_loop)
@@ -277,13 +277,13 @@ class LobbyServer(ServerBase):
     #         except socket.timeout:
     #             continue
     #         except Exception as e:
-    #             print(f"[LobbyServer] Exception in accept_connections: {e}")
+    #             print(f"[DeveloperServer] Exception in accept_connections: {e}")
 
     def on_new_connection(self, received_message_id: str, role: str, passer: MessageFormatPasser, handshake_data: dict):
         match role:
-            case Words.Roles.PLAYER:
+            case Words.Roles.DEVELOPER:
                 self.send_response(passer, received_message_id, Words.Result.SUCCESS)
-                self.handle_player(passer)
+                self.handle_developer(passer)
             case _:
                 print(f"Unknown role: {role}")
     
@@ -294,23 +294,23 @@ class LobbyServer(ServerBase):
     #         msgfmt_passer.settimeout(self.handshake_timeout)
     #         received_message_id, message_type, data = msgfmt_passer.receive_args(Formats.MESSAGE)
     #         if message_type != Words.MessageType.HANDSHAKE:
-    #             print(f"[LOBBYSERVER] received message_type {message_type}, expected {Words.MessageType.HANDSHAKE}")
+    #             print(f"[DeveloperServer] received message_type {message_type}, expected {Words.MessageType.HANDSHAKE}")
 
     #         role = data[Words.DataKeys.Handshake.ROLE]
     #         match role:
-    #             case Words.Roles.PLAYER:
+    #             case Words.Roles.DEVELOPER:
     #                 self.send_response(msgfmt_passer, received_message_id, Words.Result.SUCCESS)
-    #                 self.handle_player(msgfmt_passer)
+    #                 self.handle_developer(msgfmt_passer)
     #             case _:
     #                 print(f"Unknown role: {role}")
-            # if data[Words.DataKeys.Handshake.ROLE] == Words.Roles.PLAYER:
+            # if data[Words.DataKeys.Handshake.ROLE] == Words.Roles.DEVELOPER:
             #     # message_id = str(uuid.uuid4())
             #     # msgfmt_passer.send_args(Formats.MESSAGE, message_id, Words.MessageType.RESPONSE, {
             #     #     Words.DataKeys.Response.RESPONDING_ID: received_message_id, 
             #     #     Words.DataKeys.Response.RESULT: Words.Result.SUCCESS
             #     # })
             #     self.send_response(msgfmt_passer, received_message_id, Words.Result.SUCCESS)
-            #     self.handle_player(msgfmt_passer)
+            #     self.handle_developer(msgfmt_passer)
             # # if connection_type == Words.ConnectionType.CLIENT:
             # #     self.handle_client(msgfmt_passer)
             # # elif connection_type == Words.ConnectionType.DATABASE_SERVER:
@@ -324,8 +324,8 @@ class LobbyServer(ServerBase):
         # print(f"Connection closed. Active connections: {len(self.connections)}")
         # msgfmt_passer.close()
 
-    def handle_player(self, passer: MessageFormatPasser):
-        self.passer_player_dict[passer] = None
+    def handle_developer(self, passer: MessageFormatPasser):
+        self.passer_developer_dict[passer] = None
         passer.settimeout(self.receive_timeout)
         last_hb_time = time.time()
         while not self.stop_event.is_set():
@@ -347,7 +347,7 @@ class LobbyServer(ServerBase):
                                 login_data = self.try_request_and_wait(Words.Command.LOGIN, params)
                                 
                                 if login_data[Words.DataKeys.Response.RESULT] == Words.Result.SUCCESS:
-                                    self.passer_player_dict[passer] = username
+                                    self.passer_developer_dict[passer] = username
                                     self.send_response(passer, msg_id, Words.Result.SUCCESS)
                                 elif login_data[Words.DataKeys.Response.RESULT] == Words.Result.FAILURE:
                                     params = login_data.get(Words.DataKeys.PARAMS)
@@ -382,10 +382,10 @@ class LobbyServer(ServerBase):
                             case Words.Command.LOGOUT:
                                 # params = data.get(Words.DataKeys.PARAMS)
                                 # assert isinstance(params, dict)
-                                username = self.passer_player_dict.get(passer)
+                                username = self.passer_developer_dict.get(passer)
                                 if not username:
                                     self.send_response(passer, msg_id, Words.Result.FAILURE, {
-                                        Words.ParamKeys.Failure.REASON: "Player not logged in yet."
+                                        Words.ParamKeys.Failure.REASON: "Developer not logged in yet."
                                     })
                                     continue
                                 result_data = self.try_request_and_wait(Words.Command.LOGOUT, {
@@ -393,7 +393,7 @@ class LobbyServer(ServerBase):
                                 })
                                 self.send_response(passer, msg_id, result_data[Words.DataKeys.Response.RESULT], result_data.get(Words.DataKeys.PARAMS))
                             case Words.Command.EXIT:
-                                username = self.passer_player_dict.get(passer)
+                                username = self.passer_developer_dict.get(passer)
                                 if username:
                                     self.try_request_and_wait(Words.Command.LOGOUT, {
                                         Words.ParamKeys.Logout.USERNAME: username
@@ -407,17 +407,17 @@ class LobbyServer(ServerBase):
                         self.send_response(passer, msg_id, Words.Result.SUCCESS)
             except TimeoutError:
                 if time.time() - last_hb_time > self.client_heartbeat_timeout:
-                    print(f"[LobbyServer] client heartbeat timeout (>{self.client_heartbeat_timeout}s), terminating connection")
+                    print(f"[DeveloperServer] client heartbeat timeout (>{self.client_heartbeat_timeout}s), terminating connection")
                     break
                 continue
             except ConnectionError as e:
-                print(f"[LobbyServer] ConnectionError raised in handle_player: {e}")
+                print(f"[DeveloperServer] ConnectionError raised in handle_developer: {e}")
                 break
             except Exception as e:
-                print(f"[LobbyServer] exception raised in handle_player: {e}")
+                print(f"[DeveloperServer] exception raised in handle_developer: {e}")
                 break
 
-        self.passer_player_dict.pop(passer, None)
+        self.passer_developer_dict.pop(passer, None)
     # def try_request_and_wait(self, cmd: str, params: dict) -> dict:
     #     result_data = {}
     #     try:

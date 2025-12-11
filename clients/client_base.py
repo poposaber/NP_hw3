@@ -18,7 +18,7 @@ DEFAULT_SERVER_RESPONSE_TIMEOUT = 5.0
 
 
 class ClientBase:
-    def __init__(self, host: str, port: int,
+    def __init__(self, host: str, port: int, role: str, 
                  max_connect_try_count: int = DEFAULT_MAX_CONNECT_TRY_COUNT, 
                  max_handshake_try_count: int = DEFAULT_MAX_HANDSHAKE_TRY_COUNT,
                  connect_timeout = DEFAULT_CONNECT_TIMEOUT, 
@@ -32,6 +32,7 @@ class ClientBase:
                  on_connection_lost: Optional[Callable[[], None]] = None) -> None:
         self.host = host
         self.port = port
+        self.role = role
         self.max_connect_try_count = max(1, max_connect_try_count)
         self.max_handshake_try_count = max(1, max_handshake_try_count)
         self.connect_timeout = max(1.0, connect_timeout)
@@ -92,7 +93,7 @@ class ClientBase:
                 self.server_passer.settimeout(self.handshake_timeout)
                 message_id = str(uuid.uuid4())
                 self.server_passer.send_args(Formats.MESSAGE, message_id, Words.MessageType.HANDSHAKE, 
-                                            {Words.DataKeys.Handshake.ROLE: Words.Roles.PLAYER})
+                                            {Words.DataKeys.Handshake.ROLE: self.role})
                 
                 _, message_type, data = self.server_passer.receive_args(Formats.MESSAGE)
 

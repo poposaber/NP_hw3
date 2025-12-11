@@ -46,6 +46,7 @@ class Words:
             REASON = 'reason'
     class Roles:
         PLAYER = 'player'
+        DEVELOPER = 'developer'
         LOBBYSERVER = 'lobbyserver'
         DEVELOPERSERVER = 'developerserver'
     class Result:

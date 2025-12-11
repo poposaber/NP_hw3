@@ -271,7 +271,7 @@ class ServerBase:
                 self.connections.append(msgfmt_passer)
                 print(f"Active connections: {len(self.connections)}")
                 # Since connection may be client, db, or game server, start a thread to handle initial handshake
-                threading.Thread(target=self.handle_connections, args=(msgfmt_passer,), daemon=True).start()
+                threading.Thread(target=self.handle_connections, args=(msgfmt_passer,)).start()
                 
             except socket.timeout:
                 continue
@@ -292,9 +292,9 @@ class ServerBase:
                 return
             
             role = data.get(Words.DataKeys.Handshake.ROLE)
-            self.send_response(msgfmt_passer, received_message_id, Words.Result.SUCCESS)
+            # self.send_response(msgfmt_passer, received_message_id, Words.Result.SUCCESS)
             try:
-                self.on_new_connection(role, msgfmt_passer, data)
+                self.on_new_connection(received_message_id, role, msgfmt_passer, data)
             except Exception as e:
                 print(f"[Server] exception in on_new_connection: {e}")
         except Exception as e:
@@ -311,7 +311,7 @@ class ServerBase:
         except Exception:
             pass
 
-    def on_new_connection(self, role: str, passer: MessageFormatPasser, handshake_data: dict):
+    def on_new_connection(self, received_message_id: str, role: str, passer: MessageFormatPasser, handshake_data: dict):
         """接到 handshake 後的委派點(預設只是記錄未知 role)"""
         print(f"[ServerBase] on_new_connection called with role={role} (no handler implemented)")
 

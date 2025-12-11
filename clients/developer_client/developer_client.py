@@ -18,8 +18,8 @@ DEFAULT_HEARTBEAT_PATIENCE = 3
 DEFAULT_LOBBY_RESPONSE_TIMEOUT = 5.0
 
 
-class PlayerClient(ClientBase):
-    def __init__(self, host: str = "127.0.0.1", port: int = 21354,
+class DeveloperClient(ClientBase):
+    def __init__(self, host: str = "127.0.0.1", port: int = 21355,
                  max_connect_try_count: int = DEFAULT_MAX_CONNECT_TRY_COUNT, 
                  max_handshake_try_count: int = DEFAULT_MAX_HANDSHAKE_TRY_COUNT,
                  connect_timeout = DEFAULT_CONNECT_TIMEOUT, 
@@ -31,7 +31,7 @@ class PlayerClient(ClientBase):
                  on_connection_done: Optional[Callable[[], None]] = None, 
                  on_connection_fail: Optional[Callable[[], None]] = None, 
                  on_connection_lost: Optional[Callable[[], None]] = None) -> None:
-        super().__init__(host, port, Words.Roles.PLAYER, max_connect_try_count, max_handshake_try_count, 
+        super().__init__(host, port, Words.Roles.DEVELOPER, max_connect_try_count, max_handshake_try_count, 
                          connect_timeout, handshake_timeout, receive_timeout, lobby_response_timeout, 
                          heartbeat_interval, heartbeat_patience, on_connection_done, on_connection_fail, on_connection_lost)
     #     self.host = host

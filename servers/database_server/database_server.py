@@ -133,10 +133,19 @@ class DatabaseServer:
                         self.handle_lobby(msgfmt_passer)
                         self.lobby_passer.close()
                         self.lobby_passer = None
-
                     else:
                         self.send_response(msgfmt_passer, received_message_id, Words.Result.FAILURE, 
                                            {Words.ParamKeys.Failure.REASON: "already connected one lobby server"})
+                case Words.Roles.DEVELOPERSERVER:
+                    if self.developer_passer is None:
+                        self.developer_passer = msgfmt_passer
+                        self.send_response(msgfmt_passer, received_message_id, Words.Result.SUCCESS)
+                        self.handle_developer(msgfmt_passer)
+                        self.developer_passer.close()
+                        self.developer_passer = None
+                    else:
+                        self.send_response(msgfmt_passer, received_message_id, Words.Result.FAILURE, 
+                                           {Words.ParamKeys.Failure.REASON: "already connected one developer server"})
                 case _:
                     print(f"Unknown role: {role}")
             # if data[Words.DataKeys.Handshake.ROLE] == Words.Roles.PLAYER:
@@ -181,7 +190,7 @@ class DatabaseServer:
                                 success, reason = self._verify_player_credential(username, password)
                                 if success:
                                     assert username is not None
-                                    self._set_online(username)
+                                    self._set_player_online(username)
                                     self.send_response(passer, msg_id, Words.Result.SUCCESS)
                                 else:
                                     self.send_response(passer, msg_id, Words.Result.FAILURE, 
@@ -193,7 +202,7 @@ class DatabaseServer:
                                     self.send_response(passer, msg_id, Words.Result.FAILURE, 
                                                        {Words.ParamKeys.Failure.REASON: "Missing username."})
                                     continue
-                                self._set_offline(username)
+                                self._set_player_offline(username)
                                 self.send_response(passer, msg_id, Words.Result.SUCCESS)
                             case Words.Command.REGISTER:
                                 assert isinstance(params, dict)
@@ -207,7 +216,7 @@ class DatabaseServer:
                                     self.send_response(passer, msg_id, Words.Result.FAILURE, 
                                                        {Words.ParamKeys.Failure.REASON: "Missing password."})
                                     continue
-                                if self._verify_regable(username):
+                                if self._verify_player_regable(username):
                                     self.write_player_data(username, password)
                                     self.send_response(passer, msg_id, Words.Result.SUCCESS)
                                 else:
@@ -226,16 +235,98 @@ class DatabaseServer:
 
             except TimeoutError:
                 if time.time() - last_hb_time > self.heartbeat_timeout:
-                    print(f"[LobbyServer] client heartbeat timeout (>{self.heartbeat_timeout}s), terminating connection")
+                    print(f"[DatabaseServer] client heartbeat timeout (>{self.heartbeat_timeout}s), terminating connection")
                     break
                 continue
             except ConnectionError as e:
                 print(f"[DatabaseServer] ConnectionError raised in handle_lobby: {e}")
                 break
             except Exception as e:
+                safe_msg_id = locals().get("msg_id")
+                if safe_msg_id:
+                    try:
+                        self.send_response(passer, safe_msg_id, Words.Result.FAILURE, 
+                                            {Words.ParamKeys.Failure.REASON: "Error occurred in database server."})
+                    except Exception:
+                        pass
+                print(f"[DatabaseServer] Exception occurred in handle_lobby: {e}")
+
+    def handle_developer(self, passer: MessageFormatPasser):
+        passer.settimeout(self.receive_timeout)
+        last_hb_time = time.time()
+        while not self.stop_event.is_set():
+            try:
+                msg_id, msg_type, data = passer.receive_args(Formats.MESSAGE)
+                match msg_type:
+                    case Words.MessageType.REQUEST:
+                        assert isinstance(data, dict)
+                        cmd = data.get(Words.DataKeys.Request.COMMAND)
+                        params = data.get(Words.DataKeys.PARAMS)
+                        match cmd:
+                            case Words.Command.LOGIN:
+                                # time.sleep(10)
+                                assert isinstance(params, dict)
+                                username = params.get(Words.ParamKeys.Login.USERNAME)
+                                password = params.get(Words.ParamKeys.Login.PASSWORD)
+                                
+                                success, reason = self._verify_developer_credential(username, password)
+                                if success:
+                                    assert username is not None
+                                    self._set_developer_online(username)
+                                    self.send_response(passer, msg_id, Words.Result.SUCCESS)
+                                else:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, 
+                                                       {Words.ParamKeys.Failure.REASON: reason})
+                            case Words.Command.LOGOUT:
+                                assert isinstance(params, dict)
+                                username = params.get(Words.ParamKeys.Logout.USERNAME)
+                                if not username:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, 
+                                                       {Words.ParamKeys.Failure.REASON: "Missing username."})
+                                    continue
+                                self._set_developer_offline(username)
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS)
+                            case Words.Command.REGISTER:
+                                assert isinstance(params, dict)
+                                username = params.get(Words.ParamKeys.Register.USERNAME)
+                                password = params.get(Words.ParamKeys.Register.PASSWORD)
+                                if not username:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, 
+                                                       {Words.ParamKeys.Failure.REASON: "Missing username."})
+                                    continue
+                                if not password:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, 
+                                                       {Words.ParamKeys.Failure.REASON: "Missing password."})
+                                    continue
+                                if self._verify_developer_regable(username):
+                                    self.write_developer_data(username, password)
+                                    self.send_response(passer, msg_id, Words.Result.SUCCESS)
+                                else:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, 
+                                                       {Words.ParamKeys.Failure.REASON: "Username used by others"})
+
+                            case _:
+                                self.send_response(passer, msg_id, Words.Result.FAILURE, 
+                                                   {Words.ParamKeys.Failure.REASON: "Invalid command"})
+                    case Words.MessageType.HEARTBEAT:
+                        last_hb_time = time.time()
+                        self.send_response(passer, msg_id, Words.Result.SUCCESS)   
+                    case _:
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, 
+                                            {Words.ParamKeys.Failure.REASON: "Invalid command"})
+
+            except TimeoutError:
+                if time.time() - last_hb_time > self.heartbeat_timeout:
+                    print(f"[DatabaseServer] client heartbeat timeout (>{self.heartbeat_timeout}s), terminating connection")
+                    break
+                continue
+            except ConnectionError as e:
+                print(f"[DatabaseServer] ConnectionError raised in handle_developer: {e}")
+                break
+            except Exception as e:
                 self.send_response(passer, msg_id, Words.Result.FAILURE, 
                                             {Words.ParamKeys.Failure.REASON: "Error occurred in database server."})
-                print(f"[DatabaseServer] Exception occurred in handle_lobby: {e}")
+                print(f"[DatabaseServer] Exception occurred in handle_developer: {e}")
 
     def _verify_player_credential(self, username, password) -> tuple[bool, str]:
         if not username:
@@ -259,15 +350,15 @@ class DatabaseServer:
         else:
             return (False, "Incorrect username or password.")
     
-    def _verify_regable(self, username) -> bool:
+    def _verify_player_regable(self, username) -> bool:
         return not username in self.player_db.keys()
     
-    def _set_online(self, username: str):
+    def _set_player_online(self, username: str):
         self.player_db[username]["last_login_time"] = time.time()
         self.player_db[username]["online"] = True
         self.save_player_db()
 
-    def _set_offline(self, username):
+    def _set_player_offline(self, username):
         self.player_db[username]["online"] = False
         self.save_player_db()
 
@@ -279,6 +370,49 @@ class DatabaseServer:
             "online": False
         }
         self.save_player_db()
+
+    def _verify_developer_credential(self, username, password) -> tuple[bool, str]:
+        if not username:
+            return (False, "Missing username.")
+        if not password:
+            return (False, "Missing password.")
+        
+        record = self.developer_db.get(username)
+
+        if not record:
+            return (False, "Incorrect username or password.")
+        if isinstance(record, dict):
+            correct_password = record.get("password")
+        else:
+            correct_password = record
+        if password == correct_password:
+            if not record.get("online"):
+                return (True, "")
+            else:
+                return (False, "Account using by other clients")
+        else:
+            return (False, "Incorrect username or password.")
+    
+    def _verify_developer_regable(self, username) -> bool:
+        return not username in self.developer_db.keys()
+    
+    def _set_developer_online(self, username: str):
+        self.developer_db[username]["last_login_time"] = time.time()
+        self.developer_db[username]["online"] = True
+        self.save_developer_db()
+
+    def _set_developer_offline(self, username):
+        self.developer_db[username]["online"] = False
+        self.save_developer_db()
+
+    def write_developer_data(self, username: str, password: str):
+        self.developer_db[username] = {
+            "password": password, 
+            "create_time": time.time(), 
+            "last_login_time": None, 
+            "online": False
+        }
+        self.save_developer_db()
 
     def start(self) -> None:
         server_thread = threading.Thread(target=self.run)
@@ -294,6 +428,8 @@ class DatabaseServer:
                     break
                 elif cmd == 'resetplayer':
                     self.reset_player()
+                elif cmd == 'resetdeveloper':
+                    self.reset_developer()
                 else:
                     print("invalid command.")
         except KeyboardInterrupt:
@@ -313,7 +449,10 @@ class DatabaseServer:
             self.player_db[username]["online"] = False
         self.save_player_db()
 
-            
+    def reset_developer(self):
+        for username in self.developer_db.keys():
+            self.developer_db[username]["online"] = False
+        self.save_developer_db()
 
     def stop(self):
         self.stop_event.set()

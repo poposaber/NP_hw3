@@ -34,7 +34,7 @@ class ClientWindowBase:
         self.app.resizable(False, False)
         self.app.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        self._window_state = "login"
+        self._window_state = None
 
         self.frame_dict: dict[str, tkinter.Widget] = {}
 
@@ -114,15 +114,18 @@ class ClientWindowBase:
         # frame of homepage
         self.home_frame = customtkinter.CTkFrame(master=self.app)
         self.logout_btn = customtkinter.CTkButton(master=self.home_frame, text="Logout", command=self.logout)
-        self.logout_btn.place(relx=0.5, rely=0.5, anchor=tkinter.CENTER)
+        
+        # self.logout_btn.place(relx=0.5, rely=0.5, anchor=tkinter.CENTER)
 
         # self.frame_dict["waiting"] = self.waiting_connect_frame
         self.frame_dict["home"] = self.home_frame
         self.frame_dict["login"] = self.login_frame
         self.frame_dict["reg_success"] = self.reg_success_frame
         self.frame_dict["register"] = self.reg_frame
+        self.frame_dict["waiting_connect"] = self.waiting_connect_frame
 
-        self.waiting_connect_frame.place(relx=0.5, rely=0.5, anchor=tkinter.CENTER)
+        self.update_window_state("waiting_connect")
+        # self.waiting_connect_frame.place(relx=0.5, rely=0.5, anchor=tkinter.CENTER)
 
     def bind_func_on_label(self, label: customtkinter.CTkLabel, func: Callable[[], None]):
         # Change cursor on hover
@@ -155,9 +158,7 @@ class ClientWindowBase:
             pass
 
     def _on_client_connection_done_ui(self):
-        self.waiting_connect_frame.place_forget()
-        f = self.frame_dict[self._window_state]
-        f.place(relx=0.5, rely=0.5, anchor=tkinter.CENTER)
+        self.update_window_state("login")
 
     def _on_client_connection_lost(self):
         if self.window_stop_event.is_set():
@@ -168,15 +169,14 @@ class ClientWindowBase:
             pass
     
     def _on_client_connection_lost_ui(self):
-        f = self.frame_dict[self._window_state]
-        f.place_forget()
-        self.waiting_connect_frame.place(relx=0.5, rely=0.5, anchor=tkinter.CENTER)
+        self.update_window_state("waiting_connect")
 
     def update_window_state(self, state: str):
         if state not in self.frame_dict.keys():
             return
-        f = self.frame_dict[self._window_state]
-        f.place_forget()
+        if self._window_state and self._window_state in self.frame_dict.keys():
+            f = self.frame_dict[self._window_state]
+            f.place_forget()
         self._window_state = state
         f = self.frame_dict[self._window_state]
         if state == "home":
