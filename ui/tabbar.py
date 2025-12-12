@@ -91,7 +91,7 @@ class TabBar(customtkinter.CTkFrame):
                 pass
         # show new content under tab bar
         frame = self._frames[name]
-        frame.place(relx=0, rely=1, relwidth=1, relheight=0.92, anchor=tkinter.SW)
+        frame.place(x=0, y=self._height)
         # update buttons state
         for n, btn in self._buttons.items():
             btn.set_active(n == name)
