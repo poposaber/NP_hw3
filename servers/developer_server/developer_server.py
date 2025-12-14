@@ -7,6 +7,7 @@ from base.peer_worker import PeerWorker
 import time
 import uuid
 from servers.server_base import ServerBase
+from base.file_receiver import FileReceiver
 
 DEFAULT_ACCEPT_TIMEOUT = 1.0
 DEFAULT_CONNECT_TIMEOUT = 3.0
@@ -38,6 +39,7 @@ class DeveloperServer(ServerBase):
         self.passer_developer_dict: dict[MessageFormatPasser, str | None] = {}
                 # track ongoing uploads per connection
         self.upload_state: dict[MessageFormatPasser, dict] = {}
+        self.upload_state_lock = threading.Lock()
 
     def on_new_connection(self, received_message_id: str, role: str, passer: MessageFormatPasser, handshake_data: dict):
         match role:
@@ -53,21 +55,22 @@ class DeveloperServer(ServerBase):
         last_hb_time = time.time()
         while not self.stop_event.is_set():
             try:
-                if passer in self.upload_state.keys() and self.upload_state[passer]["uploading"]:
-                    seq, chunk = passer.recv_chunk()
-                    if not chunk: # transmitting done
-                        self.upload_state[passer]["uploading"] = False
-                    # simple sequence monotonic check
-                    st = self.upload_state.get(passer)
-                    if st['seq'] != -1 and seq != st['seq'] + 1:
-                        # out-of-order: ignore (could add buffering)
-                        pass
-                    else:
-                        st['seq'] = seq
-                        if chunk:
-                            st['file'].write(chunk)
-                            st['bytes'] += len(chunk)
-                    continue
+                # if passer in self.upload_state.keys() and not self.upload_state[passer]["upload_done"]:
+                #     seq, chunk = passer.recv_chunk()
+                #     if not chunk: # transmitting done
+                #         self.upload_state[passer]["upload_done"] = True
+                #     # simple sequence monotonic check
+                #     st = self.upload_state.get(passer)
+                #     assert isinstance(st, dict)
+                #     if st['seq'] != -1 and seq != st['seq'] + 1:
+                #         # out-of-order: ignore (could add buffering)
+                #         pass
+                #     else:
+                #         st['seq'] = seq
+                #         if chunk:
+                #             st['file'].write(chunk)
+                #             st['bytes'] += len(chunk)
+                #     continue
                 msg_id, msg_type, data = passer.receive_args(Formats.MESSAGE)
                 match msg_type:
                     case Words.MessageType.REQUEST:
@@ -161,7 +164,7 @@ class DeveloperServer(ServerBase):
                                 # prepare cache path
                                 from pathlib import Path
                                 import os, json, hashlib
-                                cache_root = Path(__file__).resolve().parent.parent / "developer_server" / "game_cache" / str(game_id) / str(version)
+                                cache_root = Path(__file__).resolve().parent / "game_cache" / str(game_id) / str(version)
                                 try:
                                     cache_root.mkdir(parents=True, exist_ok=True)
                                 except Exception as e:
@@ -178,29 +181,36 @@ class DeveloperServer(ServerBase):
                                     })
                                     continue
                                 # record state
-                                self.upload_state[passer] = {
-                                    "file": f,
-                                    "expected_size": size,
-                                    "sha256": sha256,
-                                    "bytes": 0,
-                                    "seq": -1,
-                                    "cache_root": cache_root,
-                                    "filename": filename,
-                                    "game_id": game_id,
-                                    "version": version,
-                                    "uploading": True
-                                }
-                                self.send_response(passer, msg_id, Words.Result.SUCCESS)
+                                with self.upload_state_lock:
+                                    self.upload_state[passer] = {
+                                        "file": f,
+                                        "expected_size": size,
+                                        "sha256": sha256,
+                                        "cache_root": cache_root,
+                                        "filename": filename,
+                                        "game_id": game_id,
+                                        "version": version,
+                                        "upload_done": False
+                                    }
+                                temp_server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                temp_server_sock.bind(("0.0.0.0", 0))
+                                temp_server_sock.listen(1)
+                                port = temp_server_sock.getsockname()[1]
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS, {
+                                    Words.ParamKeys.Success.PORT: port
+                                })
+                                threading.Thread(target=self.handle_upload, args=(temp_server_sock, passer), daemon=True).start()
                             case Words.Command.UPLOAD_END:
                                 # finalize the upload: verify and move into place
-                                st = self.upload_state.get(passer)
+                                with self.upload_state_lock:
+                                    st = self.upload_state.get(passer)
                                 if not st:
                                     self.send_response(passer, msg_id, Words.Result.FAILURE, {
                                         Words.ParamKeys.Failure.REASON: "No active upload"
                                     })
                                     continue
                                 params = data.get(Words.DataKeys.PARAMS) or {}
-                                last_seq = params.get("last_seq")
+                                # last_seq = params.get("last_seq")
                                 # close file
                                 try:
                                     st["file"].flush(); st["file"].close()
@@ -219,7 +229,8 @@ class DeveloperServer(ServerBase):
                                     # cleanup
                                     try: part_path.unlink()
                                     except Exception: pass
-                                    self.upload_state.pop(passer, None)
+                                    with self.upload_state_lock:
+                                        self.upload_state.pop(passer, None)
                                     self.send_response(passer, msg_id, Words.Result.FAILURE, {
                                         Words.ParamKeys.Failure.REASON: f"Size mismatch: {actual_size} != {st['expected_size']}"
                                     })
@@ -234,7 +245,8 @@ class DeveloperServer(ServerBase):
                                 except Exception as e:
                                     try: part_path.unlink()
                                     except Exception: pass
-                                    self.upload_state.pop(passer, None)
+                                    with self.upload_state_lock:
+                                        self.upload_state.pop(passer, None)
                                     self.send_response(passer, msg_id, Words.Result.FAILURE, {
                                         Words.ParamKeys.Failure.REASON: f"Checksum error: {e}"
                                     })
@@ -242,7 +254,8 @@ class DeveloperServer(ServerBase):
                                 if digest != st["sha256"]:
                                     try: part_path.unlink()
                                     except Exception: pass
-                                    self.upload_state.pop(passer, None)
+                                    with self.upload_state_lock:
+                                        self.upload_state.pop(passer, None)
                                     self.send_response(passer, msg_id, Words.Result.FAILURE, {
                                         Words.ParamKeys.Failure.REASON: "Checksum mismatch"
                                     })
@@ -254,18 +267,21 @@ class DeveloperServer(ServerBase):
                                     meta = {
                                         "game_id": st["game_id"],
                                         "version": st["version"],
+                                        "uploader": self.passer_developer_dict.get(passer), 
                                         "filename": st["filename"],
                                         "size": st["expected_size"],
                                         "sha256": st["sha256"],
                                     }
-                                    (st["cache_root"] / "metadata.json").write_text(__import__("json").dumps(meta, indent=2), encoding="utf-8")
+                                    (st["cache_root"] / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
                                 except Exception as e:
-                                    self.upload_state.pop(passer, None)
+                                    with self.upload_state_lock:
+                                        self.upload_state.pop(passer, None)
                                     self.send_response(passer, msg_id, Words.Result.FAILURE, {
                                         Words.ParamKeys.Failure.REASON: f"Finalize error: {e}"
                                     })
                                     continue
-                                self.upload_state.pop(passer, None)
+                                with self.upload_state_lock:
+                                        self.upload_state.pop(passer, None)
                                 self.send_response(passer, msg_id, Words.Result.SUCCESS)
                     case Words.MessageType.HEARTBEAT:
                         # time.sleep(12)
@@ -312,6 +328,24 @@ class DeveloperServer(ServerBase):
                 break
 
         self.passer_developer_dict.pop(passer, None)
+
+    def handle_upload(self, server_sock: socket.socket, dev_passer: MessageFormatPasser):
+        dev_sock, addr = server_sock.accept()
+        server_sock.close()
+        print(f"handle_upload get connected from {addr}")
+        with self.upload_state_lock:
+            st = self.upload_state.get(dev_passer)
+        if not st:
+            print(f"st is none in handle_upload")
+            return
+        part_path = st["cache_root"] / (str(st["filename"]) + ".part")
+        file_receiver = FileReceiver(dev_sock, part_path)
+        success = file_receiver.receive()
+        if not success:
+            print("warning: file receiving not successful.")
+        file_receiver.close()
+        
+
     # def try_request_and_wait(self, cmd: str, params: dict) -> dict:
     #     result_data = {}
     #     try:

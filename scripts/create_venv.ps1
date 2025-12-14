@@ -1,6 +1,6 @@
 param(
   [string] $venvDir = ".venv",
-  [string] $python = "py -3"
+  [string] $python = "python"
 )
 
 # create venv

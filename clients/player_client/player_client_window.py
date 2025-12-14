@@ -99,12 +99,14 @@ class PlayerClientWindow(ClientWindowBase):
                             param = data.get(Words.DataKeys.PARAMS)
                             assert isinstance(param, dict)
                             player_name = param.get(Words.ParamKeys.PlayerOnline.PLAYER_NAME)
+                            assert isinstance(player_name, str)
                             self.players_list.add_item(player_name, player_name, [("Invite", lambda: self._invite_user(player_name), True)])
                             print(f"{player_name} just jumped in the lobby server!")
                         case Words.EventName.PLAYER_OFFLINE:
                             param = data.get(Words.DataKeys.PARAMS)
                             assert isinstance(param, dict)
                             player_name = param.get(Words.ParamKeys.PlayerOnline.PLAYER_NAME)
+                            assert isinstance(player_name, str)
                             self.players_list.remove_item(player_name)
                             print(f"{player_name} left the lobby server.")
         except Exception as e:

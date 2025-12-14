@@ -60,6 +60,8 @@ class Words:
         class LobbyStatus:
             ONLINE_PLAYERS = 'online_players'
             ROOMS = 'rooms'
+        class Success:
+            PORT = 'port'
     class Roles:
         PLAYER = 'player'
         DEVELOPER = 'developer'

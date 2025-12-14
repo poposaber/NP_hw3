@@ -179,7 +179,22 @@ class DeveloperClientWindow(ClientWindowBase):
             self.upload_btn.configure(state="disabled")
         except Exception:
             pass
-        threading.Thread(target=self._run_upload_chunked, args=(p,), daemon=True).start()
+        threading.Thread(target=self._upload_game_thread, args=(p,), daemon=True).start()
+
+    def _upload_game_thread(self, zip_path: Path):
+        assert isinstance(self.client, DeveloperClient)
+        success, params = self.client.upload_file(zip_path)
+        self.app.after(0, self._on_upload_game_ui, success, params)
+        # self._notify_error(str(e))
+        # try: self.upload_btn.configure(state="normal") 
+        # except Exception: pass
+
+    def _on_upload_game_ui(self, success: bool, params: dict):
+        if success:
+            self._notify_info("Upload completed.")
+        else:
+            self._notify_error(f"Upload failed. Reason: {params.get(Words.ParamKeys.Failure.REASON, "unknown")}")
+        self.upload_btn.configure(state="normal") 
 
     def _run_upload_chunked(self, zip_path: Path) -> None:
         def _sha256_file(path: Path) -> str:

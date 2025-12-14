@@ -19,11 +19,11 @@ class ObjectList(customtkinter.CTkScrollableFrame):
         super().__init__(master=master, width=width, height=height, **kwargs)
         self.configure(width=width, height=height)
         # Ensure children can expand horizontally (relative width = 1)
-        try:
-            self._scrollable_frame.grid_columnconfigure(0, weight=1)
-        except Exception:
+        # try:
+        #     self._scrollable_frame.grid_columnconfigure(0, weight=1)
+        # except Exception:
             # Fallback if internal name changes in future versions
-            self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
         self._rows: dict[str, dict] = {}  # key -> {frame, label, btns(list), btn_bar}
 
     def clear(self):

@@ -45,7 +45,8 @@ class PlayerClient(ClientBase):
             }, self.server_response_timeout) # expected {responding_id: ..., result: success, params: {online_player: [...], rooms: {room_name: {owner: owner_name, players: [...], spectators: [...]}}}}
         except Exception as e:
             return (False, {'error': str(e)})
-        
+        params = response.get(Words.DataKeys.PARAMS)
+        assert isinstance(params, dict)
         if response.get(Words.DataKeys.Response.RESULT) != Words.Result.SUCCESS:
-            return (False, response.get(Words.DataKeys.PARAMS))
-        return (True, response.get(Words.DataKeys.PARAMS))
+            return (False, params)
+        return (True, params)

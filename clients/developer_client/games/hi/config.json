@@ -1,0 +1,8 @@
+{
+  "id": "hi",
+  "name": "hello", 
+  "version": "0.1.0", 
+  "author": "bry",
+  "min_players": 1,
+  "max_players": 4
+}

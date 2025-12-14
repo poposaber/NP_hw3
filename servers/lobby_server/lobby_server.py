@@ -344,7 +344,9 @@ class LobbyServer(ServerBase):
                                 with self.passer_player_lock:
                                     online_players = list(self.player_passer_dict.keys())
                                     try:
-                                        online_players.remove(self.passer_player_dict.get(passer))
+                                        plr = self.passer_player_dict.get(passer)
+                                        assert isinstance(plr, str)
+                                        online_players.remove(plr)
                                     except Exception:
                                         pass
                                 self.send_response(passer, msg_id, Words.Result.SUCCESS, {
@@ -358,6 +360,7 @@ class LobbyServer(ServerBase):
                                 params = data.get(Words.DataKeys.PARAMS)
                                 assert isinstance(params, dict)
                                 username = params.get(Words.ParamKeys.Login.USERNAME)
+                                assert isinstance(username, str)
                                 # password = params.get(Words.ParamKeys.Login.PASSWORD)
                                 login_data = self.try_request_and_wait(Words.Command.LOGIN, params)
                                 
