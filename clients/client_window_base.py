@@ -22,6 +22,8 @@ class ClientWindowBase:
         #                            on_connection_fail=self._on_client_connection_fail, 
         #                            on_connection_lost=self._on_client_connection_lost)
         self.client = client
+
+        self._username: Optional[str] = None
         
         self.window_thread: Optional[threading.Thread] = None
         self.window_stop_event = threading.Event()
@@ -234,6 +236,8 @@ class ClientWindowBase:
 
     def logout_thread(self):
         success, params = self.client.try_logout()
+        if success:
+            self._username = None
         try:
             self.app.after(0, self._on_logout_result_ui, success, params)
         except Exception as e:
@@ -262,6 +266,7 @@ class ClientWindowBase:
 
     def login_thread(self, username: str, password: str):
         success, params = self.client.try_login(username, password)
+        self._username = username if success else None
         try:
             self.app.after(0, self._on_login_result_ui, success, params)
         except Exception as e:

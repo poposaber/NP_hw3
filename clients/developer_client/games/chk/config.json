@@ -1,0 +1,8 @@
+{
+  "id": "chk",
+  "name": "check", 
+  "version": "0.1.0", 
+  "author": "barry",
+  "min_players": 1,
+  "max_players": 4
+}

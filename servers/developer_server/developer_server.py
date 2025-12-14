@@ -35,249 +35,9 @@ class DeveloperServer(ServerBase):
                          accept_timeout, connect_timeout, receive_timeout, handshake_timeout, 
                          db_response_timeout, max_handshake_try_count, db_heartbeat_interval, 
                          db_heartbeat_patience, client_heartbeat_timeout)
-        # self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        # self.host = host
-        # self.port = port
-        # self.db_host = db_host
-        # self.db_port = db_port
-        # self.accept_timeout = accept_timeout
-        # self.connect_timeout = connect_timeout
-        # self.receive_timeout = receive_timeout
-        # self.handshake_timeout = handshake_timeout
-        # self.db_response_timeout = db_response_timeout
-        # self.max_handshake_try_count = max_handshake_try_count
-        # self.db_heartbeat_interval = db_heartbeat_interval
-        # self.db_heartbeat_patience = db_heartbeat_patience
-        # self.client_heartbeat_timeout = client_heartbeat_timeout
-        # self.connections: list[MessageFormatPasser] = []
         self.passer_developer_dict: dict[MessageFormatPasser, str | None] = {}
-
-        # self.db_passer: MessageFormatPasser | None = None
-        # self.db_worker: Optional[PeerWorker] = None
-
-        # self.stop_event = threading.Event()
-        # self.stop_event.set()
-        # # self.connection_to_db_loss_event = threading.Event()
-        # # self.connection_to_db_loss_event.set()
-
-        # self.pending_db_messages: dict[str, tuple[tuple[str, dict], bool, Optional[tuple[str, dict]]]] = {}
-        # """{message_id: ((message_type, data) of sending message, is_sent, (message_type, data) of receiving message)}"""
-        # self.pending_db_messages_lock = threading.Lock()
-        # # self.pending_db_response_dict: dict[str, tuple[bool, str, dict]] = {}
-        # # """The dict contains all sent db_requests, after processing, received responses will be popped. {request_id: (response_received, result, data)}"""
-        # # self.pending_db_response_lock = threading.Lock()
-        # # self.invitee_inviter_set_pair: set[tuple] = set()  # {(invitee_username, inviter_username)}
-        # # self.invitation_lock = threading.Lock()
-        # #self.game_servers: dict[str, GameServer] = {}  # {room_id: GameServer}
-        # # self.game_server_threads: dict[str, threading.Thread] = {}  # {room_id: Thread}
-        # # self.game_server_win_recorded: dict[str, bool] = {}  # {room_id: bool}
-        # # self.game_server_lock = threading.Lock()
-
-        # self.thread: Optional[threading.Thread] = None
-        # self.interact_to_db_thread: Optional[threading.Thread] = None
-        # self.send_msg_thread: Optional[threading.Thread] = None
-        # self.receive_msg_thread: Optional[threading.Thread] = None
-        # self.heartbeat_thread: Optional[threading.Thread] = None
-        
-        
-        #self.send_to_DB_queue = queue.Queue()
-        #self.accept_thread = threading.Thread(target=self.accept_connections, daemon=True)
-        #self.accept_thread.start()
-
-    # def connect(self) -> bool:
-    #     attempt = 1
-    #     while not self.stop_event.is_set():
-    #         try:
-    #             print(f"[DeveloperServer] connect attempt {attempt} -> {self.db_host}:{self.db_port}")
-    #             self.reset_db_passer()
-    #             assert self.db_passer is not None
-    #             self.db_passer.settimeout(self.connect_timeout)
-    #             self.db_passer.connect(self.db_host, self.db_port)
-    #             print("[DeveloperServer] connected")
-    #             return True
-    #         except Exception as e:
-    #             attempt += 1
-    #             print(f"[DeveloperServer] connect failed: {e}, retrying...")
-                
-                
-    #     return False
-
-    # def handshake(self) -> bool:
-    #     attempt = 1
-    #     while attempt <= self.max_handshake_try_count and not self.stop_event.is_set():
-    #         try:
-    #             print(f"[DeveloperServer] handshake attempt {attempt}")
-    #             # 呼叫 send_args 或其他 handshake 流程
-    #             assert self.db_passer is not None
-    #             self.db_passer.settimeout(self.handshake_timeout)
-    #             message_id = str(uuid.uuid4())
-    #             self.db_passer.send_args(Formats.MESSAGE, message_id, Words.MessageType.HANDSHAKE, 
-    #                                         {Words.DataKeys.Handshake.ROLE: Words.Roles.DeveloperServer})
-                
-    #             _, message_type, data = self.db_passer.receive_args(Formats.MESSAGE)
-    #             if message_type != Words.MessageType.RESPONSE:
-    #                 error_message = f"received message_type {message_type}, expected {Words.MessageType.RESPONSE}"
-    #                 # print(f"[DeveloperServer] {error_message}")
-    #                 raise Exception(error_message)
-    #             responding_id = data[Words.DataKeys.Response.RESPONDING_ID]
-    #             if responding_id != message_id:
-    #                 error_message = f"received responding_id {responding_id}, expected {message_id}"
-    #                 # print(f"[DeveloperServer] {error_message}")
-    #                 raise Exception(error_message)
-    #             result = data[Words.DataKeys.Response.RESULT]
-    #             if result != Words.Result.SUCCESS:
-    #                 error_message = f"received result {result}, expected {Words.Result.SUCCESS}."
-    #                 if Words.DataKeys.PARAMS in data.keys():
-    #                     error_message += f" params: {data[Words.DataKeys.PARAMS]}"
-    #                 # print(f"[DeveloperServer] {error_message}")
-    #                 raise Exception(error_message)
-    #             return True
-    #         except Exception as e:
-    #             attempt += 1
-    #             if attempt > self.max_handshake_try_count:
-    #                 print(f"[DeveloperServer] handshake failed: {e}")
-    #                 continue
-    #             print(f"[DeveloperServer] handshake failed: {e}, retrying...")
-    #             if not self.stop_event.is_set():
-    #                 time.sleep(1)
-    #     return False
-    
-    # def interact_to_db_loop(self):
-    #     while not self.stop_event.is_set():
-    #         if not self.connect():
-    #             continue
-    #         if not self.handshake():
-    #             continue
-
-    #         # def on_db_recv(msg_tuple):
-    #         #     msg_id, msg_type, data = msg_tuple
-    #         #     # currently DB only sends RESPONSE; log others
-    #         #     if msg_type != Words.MessageType.RESPONSE:
-    #         #         print(f"[DeveloperServer] received unknown msg_type from DB: {msg_type}")
-
-    #         def on_db_lost():
-    #             print("[DeveloperServer] DB connection lost")
-    #             # self.connection_to_db_loss_event.set()
-
-    #         def make_db_hb():
-    #             return (Words.MessageType.HEARTBEAT, {})
-            
-    #         assert self.db_passer is not None
-    #         self.db_worker = PeerWorker(
-    #             passer=self.db_passer,
-    #             receive_timeout=self.receive_timeout,
-    #             heartbeat_interval=self.db_heartbeat_interval,
-    #             heartbeat_patience=self.db_heartbeat_patience,
-    #             on_connection_lost=on_db_lost,
-    #             make_heartbeat=make_db_hb,
-    #         )
-    #         self.db_worker.start()
-
-    #         # block until loss or stop
-    #         while not self.stop_event.is_set() and not self.db_worker.conn_loss_event.is_set():
-    #             time.sleep(0.2)
-
-    #         # cleanup
-    #         try:
-    #             self.db_worker.stop()
-    #         except Exception:
-    #             pass
-    #         # with self.pending_db_messages_lock:
-    #         #     self.pending_db_messages.clear()
-    #         self.reset_db_passer()
-
-    #         if not self.stop_event.is_set() and self.db_worker.conn_loss_event.is_set():
-    #             print("[DeveloperServer] Reconnecting to database server...")
-    #             # with self.pending_db_messages_lock:
-    #             #     self.pending_db_messages.clear()
-            
-    #         # self.reset_db_passer()
-
-    #     print("[DeveloperServer] stopped")
-
-    # def run(self):
-    #     self.interact_to_db_thread = threading.Thread(target=self.interact_to_db_loop)
-    #     self.interact_to_db_thread.start()
-
-    #     self.server_sock.bind((self.host, self.port))
-    #     self.server_sock.listen(5)
-    #     self.server_sock.settimeout(self.accept_timeout)
-    #     print(f"Lobby server listening on {self.host}:{self.port}")
-    #     self.accept_connections()
-
-    # def start(self) -> None:
-    #     self.stop_event.clear()
-    #     self.thread = threading.Thread(target=self.run)
-    #     self.thread.start()
-    #     # game_servers_manager_thread = threading.Thread(target=self.manage_game_servers)
-    #     # game_servers_manager_thread.start()
-    #     time.sleep(0.2)
-    #     try:
-    #         while True:
-    #             cmd = input("Enter 'stop' to stop the server: ")
-    #             if cmd == 'stop':
-    #                 self.stop()
-    #                 break
-    #             else:
-    #                 print("invalid command.")
-    #     except KeyboardInterrupt:
-    #         self.stop()
-    #         # with self.game_server_lock:
-    #         #     for game_server in self.game_servers.values():
-    #         #         game_server.stop()
-        
-    #     self.thread.join()
-    #     # game_servers_manager_thread.join()
-
-    # def stop(self):
-    #     self.stop_event.set()
-    #     # with self.game_server_lock:
-    #     #     for game_server in self.game_servers.values():
-    #     #         game_server.stop()
-    #     if not self.db_worker or self.db_worker.conn_loss_event.is_set():
-    #         if self.db_passer:
-    #             self.db_passer.close()
-
-    #     try:
-    #         self.server_sock.shutdown(socket.SHUT_RDWR)
-    #     except Exception:
-    #         pass
-    #     try:
-    #         self.server_sock.close()
-    #     except Exception:
-    #         pass
-
-    #     for psr in self.connections:
-    #         psr.close()
-
-    # def send_response(self, passer: MessageFormatPasser, responding_id: str, result: str, params: Optional[dict] = None) -> str:
-    #     message_id = str(uuid.uuid4())
-    #     data: dict[str, str | dict] = {
-    #         Words.DataKeys.Response.RESPONDING_ID: responding_id, 
-    #         Words.DataKeys.Response.RESULT: result
-    #     }
-    #     if params is not None:
-    #         data[Words.DataKeys.PARAMS] = params
-    #     passer.send_args(Formats.MESSAGE, message_id, Words.MessageType.RESPONSE, data)
-    #     return message_id
-
-    # def accept_connections(self) -> None:
-    #     while not self.stop_event.is_set():
-    #         try:
-    #             connection_sock, addr = self.server_sock.accept()
-    #             print(f"Accepted connection from {addr}")
-    #             msgfmt_passer = MessageFormatPasser(connection_sock)
-    #             #self.clients.append(msgfmt_passer)
-    #             #self.user_infos[msgfmt_passer] = UserInfo()
-    #             self.connections.append(msgfmt_passer)
-    #             print(f"Active connections: {len(self.connections)}")
-    #             # Since connection may be client, db, or game server, start a thread to handle initial handshake
-    #             threading.Thread(target=self.handle_connections, args=(msgfmt_passer,)).start()
-                
-    #         except socket.timeout:
-    #             continue
-    #         except Exception as e:
-    #             print(f"[DeveloperServer] Exception in accept_connections: {e}")
+                # track ongoing uploads per connection
+        self.upload_state: dict[MessageFormatPasser, dict] = {}
 
     def on_new_connection(self, received_message_id: str, role: str, passer: MessageFormatPasser, handshake_data: dict):
         match role:
@@ -286,43 +46,6 @@ class DeveloperServer(ServerBase):
                 self.handle_developer(passer)
             case _:
                 print(f"Unknown role: {role}")
-    
-    # def handle_connections(self, msgfmt_passer: MessageFormatPasser) -> None:
-    #     """Check handshake and pass to corresponding methods."""
-    #     try:
-    #         #while True:
-    #         msgfmt_passer.settimeout(self.handshake_timeout)
-    #         received_message_id, message_type, data = msgfmt_passer.receive_args(Formats.MESSAGE)
-    #         if message_type != Words.MessageType.HANDSHAKE:
-    #             print(f"[DeveloperServer] received message_type {message_type}, expected {Words.MessageType.HANDSHAKE}")
-
-    #         role = data[Words.DataKeys.Handshake.ROLE]
-    #         match role:
-    #             case Words.Roles.DEVELOPER:
-    #                 self.send_response(msgfmt_passer, received_message_id, Words.Result.SUCCESS)
-    #                 self.handle_developer(msgfmt_passer)
-    #             case _:
-    #                 print(f"Unknown role: {role}")
-            # if data[Words.DataKeys.Handshake.ROLE] == Words.Roles.DEVELOPER:
-            #     # message_id = str(uuid.uuid4())
-            #     # msgfmt_passer.send_args(Formats.MESSAGE, message_id, Words.MessageType.RESPONSE, {
-            #     #     Words.DataKeys.Response.RESPONDING_ID: received_message_id, 
-            #     #     Words.DataKeys.Response.RESULT: Words.Result.SUCCESS
-            #     # })
-            #     self.send_response(msgfmt_passer, received_message_id, Words.Result.SUCCESS)
-            #     self.handle_developer(msgfmt_passer)
-            # # if connection_type == Words.ConnectionType.CLIENT:
-            # #     self.handle_client(msgfmt_passer)
-            # # elif connection_type == Words.ConnectionType.DATABASE_SERVER:
-            # #     self.handle_database_server(msgfmt_passer)
-            # else:
-            #     print(f"Unknown connection type: {connection_type}")
-        # except Exception as e:
-        #     print(f"Error during handshake: {e}")
-
-        # self.connections.remove(msgfmt_passer)
-        # print(f"Connection closed. Active connections: {len(self.connections)}")
-        # msgfmt_passer.close()
 
     def handle_developer(self, passer: MessageFormatPasser):
         self.passer_developer_dict[passer] = None
@@ -330,6 +53,21 @@ class DeveloperServer(ServerBase):
         last_hb_time = time.time()
         while not self.stop_event.is_set():
             try:
+                if passer in self.upload_state.keys() and self.upload_state[passer]["uploading"]:
+                    seq, chunk = passer.recv_chunk()
+                    if not chunk: # transmitting done
+                        self.upload_state[passer]["uploading"] = False
+                    # simple sequence monotonic check
+                    st = self.upload_state.get(passer)
+                    if st['seq'] != -1 and seq != st['seq'] + 1:
+                        # out-of-order: ignore (could add buffering)
+                        pass
+                    else:
+                        st['seq'] = seq
+                        if chunk:
+                            st['file'].write(chunk)
+                            st['bytes'] += len(chunk)
+                    continue
                 msg_id, msg_type, data = passer.receive_args(Formats.MESSAGE)
                 match msg_type:
                     case Words.MessageType.REQUEST:
@@ -401,6 +139,134 @@ class DeveloperServer(ServerBase):
                                 self.send_response(passer, msg_id, Words.Result.SUCCESS)
                                 time.sleep(5)
                                 break
+                            case Words.Command.UPLOAD_START:
+                                # initialize an upload session
+                                params = data.get(Words.DataKeys.PARAMS) or {}
+                                username = self.passer_developer_dict.get(passer)
+                                if not username:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: "Developer not logged in yet."
+                                    })
+                                    continue
+                                game_id = params.get("game_id")
+                                version = params.get("version")
+                                filename = params.get("filename")
+                                size = params.get("size")
+                                sha256 = params.get("sha256")
+                                if not (game_id and version and filename and isinstance(size, int) and sha256):
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: "Missing upload metadata"
+                                    })
+                                    continue
+                                # prepare cache path
+                                from pathlib import Path
+                                import os, json, hashlib
+                                cache_root = Path(__file__).resolve().parent.parent / "developer_server" / "game_cache" / str(game_id) / str(version)
+                                try:
+                                    cache_root.mkdir(parents=True, exist_ok=True)
+                                except Exception as e:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: f"Cannot create cache: {e}"
+                                    })
+                                    continue
+                                part_path = cache_root / (str(filename) + ".part")
+                                try:
+                                    f = open(part_path, "wb")
+                                except Exception as e:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: f"Cannot open temp file: {e}"
+                                    })
+                                    continue
+                                # record state
+                                self.upload_state[passer] = {
+                                    "file": f,
+                                    "expected_size": size,
+                                    "sha256": sha256,
+                                    "bytes": 0,
+                                    "seq": -1,
+                                    "cache_root": cache_root,
+                                    "filename": filename,
+                                    "game_id": game_id,
+                                    "version": version,
+                                    "uploading": True
+                                }
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS)
+                            case Words.Command.UPLOAD_END:
+                                # finalize the upload: verify and move into place
+                                st = self.upload_state.get(passer)
+                                if not st:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: "No active upload"
+                                    })
+                                    continue
+                                params = data.get(Words.DataKeys.PARAMS) or {}
+                                last_seq = params.get("last_seq")
+                                # close file
+                                try:
+                                    st["file"].flush(); st["file"].close()
+                                except Exception:
+                                    pass
+                                from pathlib import Path
+                                import hashlib, json, os
+                                part_path = st["cache_root"] / (str(st["filename"]) + ".part")
+                                final_path = st["cache_root"] / str(st["filename"])
+                                # verify size
+                                try:
+                                    actual_size = part_path.stat().st_size
+                                except Exception:
+                                    actual_size = -1
+                                if actual_size != st["expected_size"]:
+                                    # cleanup
+                                    try: part_path.unlink()
+                                    except Exception: pass
+                                    self.upload_state.pop(passer, None)
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: f"Size mismatch: {actual_size} != {st['expected_size']}"
+                                    })
+                                    continue
+                                # verify sha256
+                                try:
+                                    h = hashlib.sha256()
+                                    with open(part_path, "rb") as rf:
+                                        for b in iter(lambda: rf.read(1024*1024), b""):
+                                            h.update(b)
+                                    digest = h.hexdigest()
+                                except Exception as e:
+                                    try: part_path.unlink()
+                                    except Exception: pass
+                                    self.upload_state.pop(passer, None)
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: f"Checksum error: {e}"
+                                    })
+                                    continue
+                                if digest != st["sha256"]:
+                                    try: part_path.unlink()
+                                    except Exception: pass
+                                    self.upload_state.pop(passer, None)
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: "Checksum mismatch"
+                                    })
+                                    continue
+                                # move into place
+                                try:
+                                    part_path.replace(final_path)
+                                    # write metadata
+                                    meta = {
+                                        "game_id": st["game_id"],
+                                        "version": st["version"],
+                                        "filename": st["filename"],
+                                        "size": st["expected_size"],
+                                        "sha256": st["sha256"],
+                                    }
+                                    (st["cache_root"] / "metadata.json").write_text(__import__("json").dumps(meta, indent=2), encoding="utf-8")
+                                except Exception as e:
+                                    self.upload_state.pop(passer, None)
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: f"Finalize error: {e}"
+                                    })
+                                    continue
+                                self.upload_state.pop(passer, None)
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS)
                     case Words.MessageType.HEARTBEAT:
                         # time.sleep(12)
                         last_hb_time = time.time()
@@ -409,6 +275,34 @@ class DeveloperServer(ServerBase):
                 if time.time() - last_hb_time > self.client_heartbeat_timeout:
                     print(f"[DeveloperServer] client heartbeat timeout (>{self.client_heartbeat_timeout}s), terminating connection")
                     break
+                # also try to receive raw chunk frames during idle
+                # try:
+                #     raw = passer.receive_raw()
+                #     if raw:
+                #         # parse: [4-byte header_len][header_json][chunk_bytes]
+                #         import struct, json as _json
+                #         if len(raw) < 4:
+                #             raise ValueError("Invalid raw frame: too short for header length")
+                #         header_len = struct.unpack("!I", raw[:4])[0]
+                #         if 4 + header_len > len(raw):
+                #             raise ValueError("Invalid raw frame: header length exceeds payload")
+                #         header = raw[4:4+header_len]
+                #         chunk = raw[4+header_len:]
+                #         info = _json.loads(header.decode('utf-8'))
+                #         if info.get('type') == 'UPLOAD_CHUNK':
+                #             st = self.upload_state.get(passer)
+                #             if st and isinstance(st.get('file'), object):
+                #                 seq = info.get('seq', -1)
+                #                 # simple sequence monotonic check
+                #                 if st['seq'] != -1 and seq != st['seq'] + 1:
+                #                     # out-of-order: ignore (could add buffering)
+                #                     pass
+                #                 else:
+                #                     st['seq'] = seq
+                #                     st['file'].write(chunk)
+                #                     st['bytes'] += len(chunk)
+                # except TimeoutError:
+                #     pass
                 continue
             except ConnectionError as e:
                 print(f"[DeveloperServer] ConnectionError raised in handle_developer: {e}")

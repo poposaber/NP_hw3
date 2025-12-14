@@ -29,7 +29,8 @@ class ClientBase:
                  heartbeat_patience = DEFAULT_HEARTBEAT_PATIENCE, 
                  on_connection_done: Optional[Callable[[], None]] = None, 
                  on_connection_fail: Optional[Callable[[], None]] = None, 
-                 on_connection_lost: Optional[Callable[[], None]] = None) -> None:
+                 on_connection_lost: Optional[Callable[[], None]] = None, 
+                 on_recv_message: Optional[Callable[[tuple[str, str, dict]], None]] = None) -> None:
         self.host = host
         self.port = port
         self.role = role
@@ -48,6 +49,7 @@ class ClientBase:
         self.on_connection_done = on_connection_done
         self.on_connection_fail = on_connection_fail
         self.on_connection_lost = on_connection_lost
+        self.on_recv_message = on_recv_message
 
         self.stop_event = threading.Event()
         self.stop_event.set()
@@ -63,7 +65,7 @@ class ClientBase:
         # """{message_id: ((message_type, data) of sending message, is_sent, (message_type, data) of receiving message)}"""
         # self.pending_messages_lock = threading.Lock()
 
-        self.event_queue: Queue = Queue()
+        # self.event_queue: Queue = Queue()
 
     def connect(self) -> bool:
         attempt = 1
@@ -208,9 +210,10 @@ class ClientBase:
                 break
             
             def on_recv(msg_tuple):
-                msg_id, msg_type, data = msg_tuple
-                # push non-response messages to event queue if needed
-                self.event_queue.put((msg_id, msg_type, data))
+                if self.on_recv_message:
+                    self.on_recv_message(msg_tuple)
+                else:
+                    print(f"[Client] received non-response message: {msg_tuple}")
 
             def on_lost():
                 # self.connection_loss_event.set()

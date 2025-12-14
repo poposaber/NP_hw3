@@ -1,5 +1,6 @@
 import socket
 import struct
+import json
 import threading
 from .message_format import MessageFormat
 
@@ -48,6 +49,28 @@ class MessageFormatPasser:
         print(f"\nSending raw data: {sending_data}")
         with self.send_lock:
             self.sock.sendall(sending_data)
+
+    def send_chunk(self, seq: int, chunk: bytes | None):
+        if not chunk:
+            header = json.dumps({"seq": seq, "size": 0}).encode("utf-8")
+            self.send_raw(header)
+            return
+        header = json.dumps({"seq": seq, "size": len(chunk)}).encode("utf-8")
+        frame = struct.pack("!I", len(header)) + header + chunk
+        with self.send_lock:
+            self.sock.sendall(frame)
+
+    def recv_chunk(self) -> tuple[int, bytes | None]:
+        prefix_dict = json.loads(self.receive_raw())
+        print(f"\nreceived prefix_dict: {prefix_dict}")
+        size = prefix_dict.get("size")
+        seq = prefix_dict.get("seq")
+        if size == 0:
+            return seq, None
+        chunk = self.read_exactly(size)
+        return seq, chunk
+
+
 
     def read_exactly(self, num_bytes: int) -> bytes:
         """Read exactly num_bytes from self.sock."""

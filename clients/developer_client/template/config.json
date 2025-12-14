@@ -1,0 +1,8 @@
+{
+  "id": "${GAME_ID}",
+  "name": "${GAME_NAME}", 
+  "version": "${VERSION}", 
+  "author": "${AUTHOR}",
+  "min_players": 1,
+  "max_players": 4
+}

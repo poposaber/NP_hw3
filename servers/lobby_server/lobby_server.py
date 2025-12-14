@@ -51,6 +51,9 @@ class LobbyServer(ServerBase):
         # self.client_heartbeat_timeout = client_heartbeat_timeout
         # self.connections: list[MessageFormatPasser] = []
         self.passer_player_dict: dict[MessageFormatPasser, str | None] = {}
+        self.player_passer_dict: dict[str, MessageFormatPasser] = {}
+        self.passer_player_lock = threading.Lock()
+        self.room_dict: dict[str, dict] = {}
 
         # self.db_passer: MessageFormatPasser | None = None
         # self.db_worker: Optional[PeerWorker] = None
@@ -325,7 +328,8 @@ class LobbyServer(ServerBase):
         # msgfmt_passer.close()
 
     def handle_player(self, passer: MessageFormatPasser):
-        self.passer_player_dict[passer] = None
+        with self.passer_player_lock:
+            self.passer_player_dict[passer] = None
         passer.settimeout(self.receive_timeout)
         last_hb_time = time.time()
         while not self.stop_event.is_set():
@@ -336,6 +340,17 @@ class LobbyServer(ServerBase):
                         assert isinstance(data, dict)
                         cmd = data.get(Words.DataKeys.Request.COMMAND)
                         match cmd:
+                            case Words.Command.SYNC_LOBBY_STATUS:
+                                with self.passer_player_lock:
+                                    online_players = list(self.player_passer_dict.keys())
+                                    try:
+                                        online_players.remove(self.passer_player_dict.get(passer))
+                                    except Exception:
+                                        pass
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS, {
+                                    Words.ParamKeys.LobbyStatus.ONLINE_PLAYERS: online_players, 
+                                    Words.ParamKeys.LobbyStatus.ROOMS: self.room_dict
+                                })
                             case Words.Command.LOGIN:
                                 # continue
                                 # time.sleep(7)
@@ -347,8 +362,11 @@ class LobbyServer(ServerBase):
                                 login_data = self.try_request_and_wait(Words.Command.LOGIN, params)
                                 
                                 if login_data[Words.DataKeys.Response.RESULT] == Words.Result.SUCCESS:
-                                    self.passer_player_dict[passer] = username
+                                    with self.passer_player_lock:
+                                        self.passer_player_dict[passer] = username
+                                        self.player_passer_dict[username] = passer
                                     self.send_response(passer, msg_id, Words.Result.SUCCESS)
+                                    self.broadcast_player_online(username)
                                 elif login_data[Words.DataKeys.Response.RESULT] == Words.Result.FAILURE:
                                     params = login_data.get(Words.DataKeys.PARAMS)
                                     assert isinstance(params, dict)
@@ -382,7 +400,8 @@ class LobbyServer(ServerBase):
                             case Words.Command.LOGOUT:
                                 # params = data.get(Words.DataKeys.PARAMS)
                                 # assert isinstance(params, dict)
-                                username = self.passer_player_dict.get(passer)
+                                with self.passer_player_lock:
+                                    username = self.passer_player_dict.get(passer)
                                 if not username:
                                     self.send_response(passer, msg_id, Words.Result.FAILURE, {
                                         Words.ParamKeys.Failure.REASON: "Player not logged in yet."
@@ -392,14 +411,23 @@ class LobbyServer(ServerBase):
                                     Words.ParamKeys.Logout.USERNAME: username
                                 })
                                 self.send_response(passer, msg_id, result_data[Words.DataKeys.Response.RESULT], result_data.get(Words.DataKeys.PARAMS))
+                                with self.passer_player_lock:
+                                    self.passer_player_dict[passer] = None
+                                    self.player_passer_dict.pop(username, None)
+                                self.broadcast_player_offline(username)
                             case Words.Command.EXIT:
-                                username = self.passer_player_dict.get(passer)
+                                with self.passer_player_lock:
+                                    username = self.passer_player_dict.get(passer)
                                 if username:
                                     self.try_request_and_wait(Words.Command.LOGOUT, {
                                         Words.ParamKeys.Logout.USERNAME: username
                                     })
+                                    with self.passer_player_lock:
+                                        self.passer_player_dict[passer] = None
+                                        self.player_passer_dict.pop(username, None)
+                                    self.broadcast_player_offline(username)
                                 self.send_response(passer, msg_id, Words.Result.SUCCESS)
-                                time.sleep(5)
+                                time.sleep(3)
                                 break
                     case Words.MessageType.HEARTBEAT:
                         # time.sleep(12)
@@ -416,8 +444,10 @@ class LobbyServer(ServerBase):
             except Exception as e:
                 print(f"[LobbyServer] exception raised in handle_player: {e}")
                 break
-
-        self.passer_player_dict.pop(passer, None)
+        with self.passer_player_lock:
+            uname = self.passer_player_dict.pop(passer, None)
+            if uname:
+                self.player_passer_dict.pop(uname, None)
     # def try_request_and_wait(self, cmd: str, params: dict) -> dict:
     #     result_data = {}
     #     try:
@@ -451,4 +481,40 @@ class LobbyServer(ServerBase):
     #     except Exception:
     #         pass
     #     self.db_passer = MessageFormatPasser()
+    def send_event(self, passer: MessageFormatPasser, event_name: str, params: Optional[dict] = None):
+        message_id = str(uuid.uuid4())
+        data: dict[str, str | dict] = {
+            Words.DataKeys.Event.EVENT_NAME: event_name, 
+        }
+        if params is not None:
+            data[Words.DataKeys.PARAMS] = params
+        passer.send_args(Formats.MESSAGE, message_id, Words.MessageType.EVENT, data)
+
+    def send_player_online(self, passer: MessageFormatPasser, player_name: str):
+        self.send_event(passer, Words.EventName.PLAYER_ONLINE, {
+            Words.ParamKeys.PlayerOnline.PLAYER_NAME: player_name
+        })
+
+    def broadcast_player_online(self, player_name: str):
+        with self.passer_player_lock:
+            targets = [p for p, uname in self.passer_player_dict.items() if uname is not None and uname != player_name]
+        for p in targets:
+            try:
+                self.send_player_online(p, player_name)
+            except Exception as e:
+                print(f"[LobbyServer] send_player_online error: {e}")
+    
+    def send_player_offline(self, passer: MessageFormatPasser, player_name: str):
+        self.send_event(passer, Words.EventName.PLAYER_OFFLINE, {
+            Words.ParamKeys.PlayerOnline.PLAYER_NAME: player_name
+        })
+
+    def broadcast_player_offline(self, player_name: str):
+        with self.passer_player_lock:
+            targets = [p for p, uname in self.passer_player_dict.items() if uname is not None and uname != player_name]
+        for p in targets:
+            try:
+                self.send_player_offline(p, player_name)
+            except Exception as e:
+                print(f"[LobbyServer] send_player_offline error: {e}")
 

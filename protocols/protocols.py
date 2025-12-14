@@ -20,10 +20,17 @@ class Words:
         HANDSHAKE = 'handshake'
         HEARTBEAT = 'heartbeat'
     class Command:
+        SYNC_LOBBY_STATUS = 'sync_lobby_status'
+        GET_PLAYER_ROOM_STATUS = 'get_player_room_status'
         LOGIN = 'login'
         LOGOUT = 'logout'
         REGISTER = 'register'
         EXIT = 'exit'
+        UPLOAD_START = 'upload_start'
+        UPLOAD_END = 'upload_end'
+    class EventName:
+        PLAYER_ONLINE = 'player_online'
+        PLAYER_OFFLINE = 'player_offline'
     class DataKeys:
         PARAMS = 'params'
         class Handshake:
@@ -33,6 +40,8 @@ class Words:
             RESULT = 'result'
         class Request:
             COMMAND = 'command'
+        class Event:
+            EVENT_NAME = 'event_name'
     class ParamKeys:
         class Login:
             USERNAME = 'username'
@@ -44,6 +53,13 @@ class Words:
             PASSWORD = 'password'
         class Failure:
             REASON = 'reason'
+        class PlayerOnline:
+            PLAYER_NAME = 'player_name'
+        class PlayerOffline:
+            PLAYER_NAME = 'player_name'
+        class LobbyStatus:
+            ONLINE_PLAYERS = 'online_players'
+            ROOMS = 'rooms'
     class Roles:
         PLAYER = 'player'
         DEVELOPER = 'developer'
