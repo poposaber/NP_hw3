@@ -8,6 +8,11 @@ import time
 import uuid
 from servers.server_base import ServerBase
 from base.file_receiver import FileReceiver
+from base.file_sender import FileSender
+import queue
+from pathlib import Path
+import hashlib, json, os
+from base.file_checker import FileChecker
 
 DEFAULT_ACCEPT_TIMEOUT = 1.0
 DEFAULT_CONNECT_TIMEOUT = 3.0
@@ -19,6 +24,7 @@ DEFAULT_DB_HEARTBEAT_PATIENCE = 3
 DEFAULT_DB_RESPONSE_TIMEOUT = 3.0
 DEFAULT_CLIENT_HEARTBEAT_TIMEOUT = 30.0
 
+GAME_CACHE_DIR = Path(__file__).resolve().parent / "game_cache"
 
 class DeveloperServer(ServerBase):
     def __init__(self, host: str = "0.0.0.0", port: int = 21355, 
@@ -40,6 +46,52 @@ class DeveloperServer(ServerBase):
                 # track ongoing uploads per connection
         self.upload_state: dict[MessageFormatPasser, dict] = {}
         self.upload_state_lock = threading.Lock()
+        self.upload_to_database_queue: queue.Queue[Path] = queue.Queue() # storing path of .zip
+        self.upload_to_database_thread = threading.Thread(target=self.upload_to_database_loop)
+        
+    def _run_threads(self):
+        super()._run_threads()
+        self.upload_to_database_thread.start()
+
+    def upload_to_database_loop(self):
+        while not self.stop_event.is_set():
+            try:
+                path = self.upload_to_database_queue.get(timeout=0.5)
+                metadata_path = path.parent / "metadata.json"
+                metadata: dict = {}
+                try:
+                    if not metadata_path.exists():
+                        raise FileNotFoundError(str(metadata_path))
+                    with metadata_path.open("r", encoding="utf-8") as mf:
+                        metadata = json.load(mf)
+                    if not isinstance(metadata, dict):
+                        raise ValueError("metadata.json does not contain a JSON object")
+                except Exception as e:
+                    print(f"[DeveloperServer] failed to load metadata: {e}")
+                    continue
+                response = self.try_request_and_wait(Words.Command.UPLOAD_START, metadata)
+                if response.get(Words.DataKeys.Response.RESULT) != Words.Result.SUCCESS:
+                    print(f"Upload start failed. Params: {response.get(Words.DataKeys.PARAMS)}")
+                    continue
+                params = response.get(Words.DataKeys.PARAMS)
+                assert isinstance(params, dict)
+                port = params.get(Words.ParamKeys.Success.PORT)
+                temp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                temp_sock.connect((self.db_host, port))
+                file_sender = FileSender(temp_sock, path)
+                file_sender.send()
+
+                response = self.try_request_and_wait(Words.Command.UPLOAD_END, {})
+                if response.get(Words.DataKeys.Response.RESULT) != Words.Result.SUCCESS:
+                    print(f"Upload end failed. Params: {response.get(Words.DataKeys.PARAMS)}")
+                    continue
+                file_sender.close()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                print(f"Exception in upload_to_database_loop: {e}")
+        print("exited upload_to_database_loop")
+
 
     def on_new_connection(self, received_message_id: str, role: str, passer: MessageFormatPasser, handshake_data: dict):
         match role:
@@ -55,22 +107,6 @@ class DeveloperServer(ServerBase):
         last_hb_time = time.time()
         while not self.stop_event.is_set():
             try:
-                # if passer in self.upload_state.keys() and not self.upload_state[passer]["upload_done"]:
-                #     seq, chunk = passer.recv_chunk()
-                #     if not chunk: # transmitting done
-                #         self.upload_state[passer]["upload_done"] = True
-                #     # simple sequence monotonic check
-                #     st = self.upload_state.get(passer)
-                #     assert isinstance(st, dict)
-                #     if st['seq'] != -1 and seq != st['seq'] + 1:
-                #         # out-of-order: ignore (could add buffering)
-                #         pass
-                #     else:
-                #         st['seq'] = seq
-                #         if chunk:
-                #             st['file'].write(chunk)
-                #             st['bytes'] += len(chunk)
-                #     continue
                 msg_id, msg_type, data = passer.receive_args(Formats.MESSAGE)
                 match msg_type:
                     case Words.MessageType.REQUEST:
@@ -151,20 +187,35 @@ class DeveloperServer(ServerBase):
                                         Words.ParamKeys.Failure.REASON: "Developer not logged in yet."
                                     })
                                     continue
-                                game_id = params.get("game_id")
-                                version = params.get("version")
-                                filename = params.get("filename")
-                                size = params.get("size")
-                                sha256 = params.get("sha256")
-                                if not (game_id and version and filename and isinstance(size, int) and sha256):
+                                game_id = params.get(Words.ParamKeys.Metadata.GAME_ID)
+                                version = params.get(Words.ParamKeys.Metadata.VERSION)
+                                file_name = params.get(Words.ParamKeys.Metadata.FILE_NAME)
+                                size = params.get(Words.ParamKeys.Metadata.SIZE)
+                                sha256 = params.get(Words.ParamKeys.Metadata.SHA256)
+                                game_name = params.get(Words.ParamKeys.Metadata.GAME_NAME)
+                                if not (game_id and version and file_name and isinstance(size, int) and sha256 and game_name):
                                     self.send_response(passer, msg_id, Words.Result.FAILURE, {
                                         Words.ParamKeys.Failure.REASON: "Missing upload metadata"
                                     })
                                     continue
+                                # check game valid
+                                result_data = self.try_request_and_wait(Words.Command.CHECK_GAME_VALID, {
+                                    Words.ParamKeys.Metadata.GAME_ID: game_id, 
+                                    Words.ParamKeys.Metadata.VERSION: version, 
+                                    Words.ParamKeys.Metadata.UPLOADER: self.passer_developer_dict.get(passer)
+                                })
+
+                                if result_data.get(Words.DataKeys.Response.RESULT) != Words.Result.SUCCESS:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, result_data.get(Words.DataKeys.PARAMS))
+                                    continue
+
+                                
+
+
                                 # prepare cache path
                                 from pathlib import Path
                                 import os, json, hashlib
-                                cache_root = Path(__file__).resolve().parent / "game_cache" / str(game_id) / str(version)
+                                cache_root = GAME_CACHE_DIR / str(game_id) / str(version)
                                 try:
                                     cache_root.mkdir(parents=True, exist_ok=True)
                                 except Exception as e:
@@ -172,24 +223,24 @@ class DeveloperServer(ServerBase):
                                         Words.ParamKeys.Failure.REASON: f"Cannot create cache: {e}"
                                     })
                                     continue
-                                part_path = cache_root / (str(filename) + ".part")
-                                try:
-                                    f = open(part_path, "wb")
-                                except Exception as e:
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
-                                        Words.ParamKeys.Failure.REASON: f"Cannot open temp file: {e}"
-                                    })
-                                    continue
+                                # part_path = cache_root / (str(filename) + ".part")
+                                # try:
+                                #     f = open(part_path, "wb")
+                                # except Exception as e:
+                                #     self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                #         Words.ParamKeys.Failure.REASON: f"Cannot open temp file: {e}"
+                                #     })
+                                #     continue
                                 # record state
                                 with self.upload_state_lock:
+                                    # "file": f,
                                     self.upload_state[passer] = {
-                                        "file": f,
-                                        "expected_size": size,
-                                        "sha256": sha256,
-                                        "cache_root": cache_root,
-                                        "filename": filename,
-                                        "game_id": game_id,
-                                        "version": version,
+                                        Words.ParamKeys.Metadata.SIZE: size,
+                                        Words.ParamKeys.Metadata.SHA256: sha256,
+                                        Words.ParamKeys.Metadata.FILE_NAME: file_name,
+                                        Words.ParamKeys.Metadata.GAME_ID: game_id,
+                                        Words.ParamKeys.Metadata.VERSION: version,
+                                        Words.ParamKeys.Metadata.GAME_NAME: game_name, 
                                         "upload_done": False
                                     }
                                 temp_server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -202,6 +253,7 @@ class DeveloperServer(ServerBase):
                                 threading.Thread(target=self.handle_upload, args=(temp_server_sock, passer), daemon=True).start()
                             case Words.Command.UPLOAD_END:
                                 # finalize the upload: verify and move into place
+                                st = {}
                                 with self.upload_state_lock:
                                     st = self.upload_state.get(passer)
                                 if not st:
@@ -209,70 +261,47 @@ class DeveloperServer(ServerBase):
                                         Words.ParamKeys.Failure.REASON: "No active upload"
                                     })
                                     continue
-                                params = data.get(Words.DataKeys.PARAMS) or {}
-                                # last_seq = params.get("last_seq")
-                                # close file
-                                try:
-                                    st["file"].flush(); st["file"].close()
-                                except Exception:
-                                    pass
-                                from pathlib import Path
-                                import hashlib, json, os
-                                part_path = st["cache_root"] / (str(st["filename"]) + ".part")
-                                final_path = st["cache_root"] / str(st["filename"])
-                                # verify size
-                                try:
-                                    actual_size = part_path.stat().st_size
-                                except Exception:
-                                    actual_size = -1
-                                if actual_size != st["expected_size"]:
-                                    # cleanup
-                                    try: part_path.unlink()
-                                    except Exception: pass
+                                done = False
+                                check_count = 0
+                                while check_count <= 15:
                                     with self.upload_state_lock:
-                                        self.upload_state.pop(passer, None)
+                                        st = self.upload_state.get(passer) or {}
+                                        print(f"upload_done: {st.get('upload_done')}")
+                                        if st.get("upload_done"):
+                                            done = True
+                                            break
+                                    check_count += 1
+                                    time.sleep(0.2)
+
+                                if not done:
                                     self.send_response(passer, msg_id, Words.Result.FAILURE, {
-                                        Words.ParamKeys.Failure.REASON: f"Size mismatch: {actual_size} != {st['expected_size']}"
+                                        Words.ParamKeys.Failure.REASON: "Upload not done."
                                     })
                                     continue
-                                # verify sha256
-                                try:
-                                    h = hashlib.sha256()
-                                    with open(part_path, "rb") as rf:
-                                        for b in iter(lambda: rf.read(1024*1024), b""):
-                                            h.update(b)
-                                    digest = h.hexdigest()
-                                except Exception as e:
-                                    try: part_path.unlink()
-                                    except Exception: pass
-                                    with self.upload_state_lock:
-                                        self.upload_state.pop(passer, None)
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
-                                        Words.ParamKeys.Failure.REASON: f"Checksum error: {e}"
-                                    })
+                                
+                                final_path = GAME_CACHE_DIR / str(st[Words.ParamKeys.Metadata.GAME_ID]) / str(st[Words.ParamKeys.Metadata.VERSION]) / str(st[Words.ParamKeys.Metadata.FILE_NAME])
+                                
+                                file_checker = FileChecker(final_path, st)
+                                success, params = file_checker.check()
+                                if not success:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, params)
                                     continue
-                                if digest != st["sha256"]:
-                                    try: part_path.unlink()
-                                    except Exception: pass
-                                    with self.upload_state_lock:
-                                        self.upload_state.pop(passer, None)
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
-                                        Words.ParamKeys.Failure.REASON: "Checksum mismatch"
-                                    })
-                                    continue
+
                                 # move into place
                                 try:
-                                    part_path.replace(final_path)
+                                    # part_path.replace(final_path)
                                     # write metadata
                                     meta = {
-                                        "game_id": st["game_id"],
-                                        "version": st["version"],
-                                        "uploader": self.passer_developer_dict.get(passer), 
-                                        "filename": st["filename"],
-                                        "size": st["expected_size"],
-                                        "sha256": st["sha256"],
+                                        Words.ParamKeys.Metadata.GAME_ID: st[Words.ParamKeys.Metadata.GAME_ID],
+                                        Words.ParamKeys.Metadata.GAME_NAME: st[Words.ParamKeys.Metadata.GAME_NAME], 
+                                        Words.ParamKeys.Metadata.VERSION: st[Words.ParamKeys.Metadata.VERSION],
+                                        Words.ParamKeys.Metadata.UPLOADER: self.passer_developer_dict.get(passer), 
+                                        Words.ParamKeys.Metadata.FILE_NAME: st[Words.ParamKeys.Metadata.FILE_NAME],
+                                        Words.ParamKeys.Metadata.SIZE: st[Words.ParamKeys.Metadata.SIZE],
+                                        Words.ParamKeys.Metadata.SHA256: st[Words.ParamKeys.Metadata.SHA256],
                                     }
-                                    (st["cache_root"] / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+                                    # meta = st.copy()
+                                    (GAME_CACHE_DIR / str(st[Words.ParamKeys.Metadata.GAME_ID]) / str(st[Words.ParamKeys.Metadata.VERSION]) / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
                                 except Exception as e:
                                     with self.upload_state_lock:
                                         self.upload_state.pop(passer, None)
@@ -280,9 +309,22 @@ class DeveloperServer(ServerBase):
                                         Words.ParamKeys.Failure.REASON: f"Finalize error: {e}"
                                     })
                                     continue
+
                                 with self.upload_state_lock:
-                                        self.upload_state.pop(passer, None)
+                                    self.upload_state.pop(passer, None)
                                 self.send_response(passer, msg_id, Words.Result.SUCCESS)
+                                self.upload_to_database_queue.put(final_path)
+                            case Words.Command.CHECK_MY_WORKS:
+                                result_data = self.try_request_and_wait(Words.Command.CHECK_DEV_WORKS, {
+                                    Words.ParamKeys.CheckInfo.USERNAME: self.passer_developer_dict[passer]
+                                    })
+                                params = result_data.get(Words.DataKeys.PARAMS)
+                                if result_data.get(Words.DataKeys.Response.RESULT) != Words.Result.SUCCESS:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, params)
+                                    continue
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS, params)
+                            case _:
+                                self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: "Unknown command."})
                     case Words.MessageType.HEARTBEAT:
                         # time.sleep(12)
                         last_hb_time = time.time()
@@ -338,12 +380,16 @@ class DeveloperServer(ServerBase):
         if not st:
             print(f"st is none in handle_upload")
             return
-        part_path = st["cache_root"] / (str(st["filename"]) + ".part")
-        file_receiver = FileReceiver(dev_sock, part_path)
+        # file_path = st["cache_root"] / str(st["filename"])
+        file_path = GAME_CACHE_DIR / str(st[Words.ParamKeys.Metadata.GAME_ID]) / str(st[Words.ParamKeys.Metadata.VERSION]) / str(st[Words.ParamKeys.Metadata.FILE_NAME])
+        file_receiver = FileReceiver(dev_sock, file_path)
         success = file_receiver.receive()
         if not success:
             print("warning: file receiving not successful.")
+        with self.upload_state_lock:
+            self.upload_state[dev_passer]["upload_done"] = True
         file_receiver.close()
+        print("exited handle_upload")
         
 
     # def try_request_and_wait(self, cmd: str, params: dict) -> dict:

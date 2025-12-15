@@ -201,12 +201,13 @@ class ServerBase:
         print(f"Server listening on {self.host}:{self.port}")
         self.accept_connections()
 
-    def start(self) -> None:
+    def _run_threads(self):
         self.stop_event.clear()
         self.thread = threading.Thread(target=self.run)
         self.thread.start()
-        # game_servers_manager_thread = threading.Thread(target=self.manage_game_servers)
-        # game_servers_manager_thread.start()
+
+    def start(self) -> None:
+        self._run_threads()
         time.sleep(0.2)
         try:
             while True:
@@ -221,7 +222,7 @@ class ServerBase:
             # with self.game_server_lock:
             #     for game_server in self.game_servers.values():
             #         game_server.stop()
-        
+        assert self.thread
         self.thread.join()
         # game_servers_manager_thread.join()
 

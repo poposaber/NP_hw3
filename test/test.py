@@ -17,5 +17,7 @@ from pathlib import Path
 d = {"2": 4, "7h": "df"}
 d.pop("2", None)
 print(d)
+print("\""+str(None)+"\"")
+print("3.5.6".split("."))
 
         

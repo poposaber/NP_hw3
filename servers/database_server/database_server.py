@@ -11,6 +11,9 @@ import uuid
 import json
 import os
 from pathlib import Path
+from base.file_receiver import FileReceiver
+import hashlib
+from base.file_checker import FileChecker
 
 DEFAULT_ACCEPT_TIMEOUT = 1.0
 DEFAULT_RECEIVE_TIMEOUT = 1.0
@@ -28,6 +31,7 @@ ROOM_DB_FILE = DATA_DIR / "room_db.json"
 DEVELOPER_DB_FILE = DATA_DIR / "developer_db.json"
 
 GAME_FOLDER = PARENT_DIR / "games"
+GAME_FOLDER.mkdir(parents=True, exist_ok=True)
 
 class DatabaseServer:
     def __init__(self, host: str = "0.0.0.0", port: int = 32132, 
@@ -51,6 +55,9 @@ class DatabaseServer:
         self.player_db = self.load_player_db()
         self.developer_db = self.load_developer_db()
         self.room_db = self.load_room_db()
+
+        self.upload_params: dict = {}
+        self.upload_lock = threading.Lock()
 
     def load_db(self, path: Path):
         if not os.path.exists(path):
@@ -304,7 +311,187 @@ class DatabaseServer:
                                 else:
                                     self.send_response(passer, msg_id, Words.Result.FAILURE, 
                                                        {Words.ParamKeys.Failure.REASON: "Username used by others"})
+                            case Words.Command.CHECK_GAME_VALID:
+                                assert isinstance(params, dict)
+                                game_id = str(params.get(Words.ParamKeys.Metadata.GAME_ID))
+                                version = str(params.get(Words.ParamKeys.Metadata.VERSION))
+                                uploader = str(params.get(Words.ParamKeys.Metadata.UPLOADER))
 
+                                big_meta_path = GAME_FOLDER / game_id / "big_metadata.json"
+                                if big_meta_path.exists():
+                                    # big_meta_path = path / "big_metadata.json"
+                                    try:
+                                        with open(big_meta_path, "rb") as rf:
+                                            big_meta = json.load(rf)
+                                        assert isinstance(big_meta, dict)
+                                        actual_uploader = str(big_meta.get(Words.ParamKeys.Metadata.UPLOADER))
+                                        if actual_uploader != uploader:
+                                            self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                                Words.ParamKeys.Failure.REASON: f"Exists same game_id but not yours. Uploader: {actual_uploader}"
+                                            })
+                                            continue
+                                    except Exception as e:
+                                        self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                            Words.ParamKeys.Failure.REASON: f"Exception when comparing uploaders: {e}"
+                                        })
+                                        continue
+                                    previous_version = str(big_meta.get(Words.ParamKeys.Metadata.VERSION))
+                                    try:
+                                        px, py, pz = [int(s) for s in previous_version.split(".")]
+                                        nx, ny, nz = [int(s) for s in version.split(".")]
+                                        if px > nx or (px == nx and py > ny) or (px == nx and py == ny and pz >= nz):
+                                            self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                                Words.ParamKeys.Failure.REASON: f"version not lexigraphically bigger than previous version. Previous version: {previous_version}, Uploading version: {version}"
+                                            })
+                                            continue
+                                    except Exception as e:
+                                        self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                            Words.ParamKeys.Failure.REASON: f"Exception when comparing versions: {e}"
+                                        })
+                                        continue
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS)
+                                    
+
+                            case Words.Command.UPLOAD_START:
+                                with self.upload_lock:
+                                    if self.upload_params:
+                                        self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                            Words.ParamKeys.Failure.REASON: "Other data is uploading."
+                                        })
+                                        continue
+                                assert isinstance(params, dict)
+                                game_id = params.get(Words.ParamKeys.Metadata.GAME_ID)
+                                game_name = params.get(Words.ParamKeys.Metadata.GAME_NAME)
+                                version = params.get(Words.ParamKeys.Metadata.VERSION)
+                                uploader = params.get(Words.ParamKeys.Metadata.UPLOADER)
+                                file_name = params.get(Words.ParamKeys.Metadata.FILE_NAME)
+                                size = params.get(Words.ParamKeys.Metadata.SIZE)
+                                sha256 = params.get(Words.ParamKeys.Metadata.SHA256)
+                                assert isinstance(game_id, str) and isinstance(version, str) and isinstance(file_name, str)
+                                assert isinstance(uploader, str) and isinstance(size, int) and isinstance(sha256, str) and isinstance(game_name, str)
+                                # game_root_dir = GAME_FOLDER / game_id
+                                # game_root_dir.mkdir(parents=True, exist_ok=True)
+                                # metadata_path = GAME_FOLDER / game_id / "metadata.json"
+                                # try:
+                                #     meta_obj = params
+                                #     with metadata_path.open("w", encoding="utf-8") as outf:
+                                #         json.dump(meta_obj, outf, ensure_ascii=False, indent=2)
+                                # except Exception as e:
+                                #     self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                #         Words.ParamKeys.Failure.REASON: f"Failed to write metadata: {e}"
+                                #     })
+                                #     continue
+                                game_dir = GAME_FOLDER / game_id / version
+                                game_dir.mkdir(parents=True, exist_ok=True)
+                                # game_file_path = game_dir / file_name
+                                with self.upload_lock:
+                                    self.upload_params = dict(params)
+                                    self.upload_params["upload_done"] = False
+                                    # self.upload_params["game_file_path"] = game_file_path
+                                server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                server_sock.bind(("0.0.0.0", 0))
+                                server_sock.listen(1)
+                                port = server_sock.getsockname()[1]
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS, {
+                                    Words.ParamKeys.Success.PORT: port
+                                })
+                                threading.Thread(target=self.handle_upload, args=(server_sock,), daemon=True).start()
+                            case Words.Command.UPLOAD_END:
+                                with self.upload_lock:
+                                    if not self.upload_params:
+                                        self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                            Words.ParamKeys.Failure.REASON: "No data is uploading."
+                                        })
+                                        continue
+                                done = False
+                                check_count = 0
+                                while check_count <= 15:
+                                    with self.upload_lock:
+                                        upload_done = self.upload_params.get("upload_done")
+                                        print(f"upload_done: {upload_done}")
+                                        if upload_done:
+                                            done = True
+                                            break
+                                    check_count += 1
+                                    time.sleep(0.2)
+                                if not done:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                            Words.ParamKeys.Failure.REASON: "Upload is not done"
+                                        })
+                                    continue
+                                    
+                                with self.upload_lock:
+                                    st = self.upload_params.copy()
+
+                                # part_path = st["cache_root"] / (str(st["filename"]) + ".part")
+                                game_id = str(st.get(Words.ParamKeys.Metadata.GAME_ID))
+                                game_name = str(st.get(Words.ParamKeys.Metadata.GAME_NAME))
+                                version = str(st.get(Words.ParamKeys.Metadata.VERSION))
+                                uploader = str(st.get(Words.ParamKeys.Metadata.UPLOADER))
+                                file_name = str(st.get(Words.ParamKeys.Metadata.FILE_NAME))
+                                size = st.get(Words.ParamKeys.Metadata.SIZE)
+                                sha256 = str(st.get(Words.ParamKeys.Metadata.SHA256))
+
+                                final_path = GAME_FOLDER / game_id / version / file_name
+                                assert isinstance(size, int)
+
+                                file_checker = FileChecker(final_path, st)
+                                success, params = file_checker.check()
+                                if not success:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, params)
+                                    continue
+
+                                # move into place
+                                try:
+                                    # final_path.replace(final_path)
+                                    # write metadata
+                                    meta = {
+                                        Words.ParamKeys.Metadata.GAME_ID: game_id,
+                                        Words.ParamKeys.Metadata.GAME_NAME: game_name, 
+                                        Words.ParamKeys.Metadata.VERSION: version,
+                                        Words.ParamKeys.Metadata.UPLOADER: uploader, 
+                                        Words.ParamKeys.Metadata.FILE_NAME: file_name,
+                                        Words.ParamKeys.Metadata.SIZE: size,
+                                        Words.ParamKeys.Metadata.SHA256: sha256,
+                                    }
+
+                                    big_meta_path = GAME_FOLDER / game_id / "big_metadata.json"
+                                    # big_meta = {}
+                                    version_list = []
+                                    if big_meta_path.exists():
+                                        with open(big_meta_path, "rb") as rf:
+                                            temp_big_meta = json.load(rf)
+                                            version_list = temp_big_meta[Words.ParamKeys.Metadata.ALL_VERSIONS]
+                                    big_meta = meta.copy()
+                                    version_list.append(version)
+                                    big_meta[Words.ParamKeys.Metadata.ALL_VERSIONS] = version_list
+                                    # else:
+                                    #     big_meta = meta.copy()
+                                    #     big_meta[Words.ParamKeys.Metadata.ALL_VERSIONS] = []
+                                    # try:
+                                    #     big_meta[Words.ParamKeys.Metadata.ALL_VERSIONS].append(version)
+                                    # except Exception:
+                                    #     print("failed to add version to all_versions")
+                                        
+                                    
+                                    (GAME_FOLDER / game_id / version / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+                                    big_meta_path.write_text(json.dumps(big_meta, indent=2), encoding="utf-8")
+                                except Exception as e:
+                                    with self.upload_lock:
+                                        self.upload_params.clear()
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: f"Finalize error: {e}"
+                                    })
+                                    continue
+                                self.add_developer_uploaded_games(uploader, game_id, game_name, version)
+                                with self.upload_lock:
+                                    self.upload_params.clear()
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS)
+                            case Words.Command.CHECK_DEV_WORKS:
+                                assert isinstance(params, dict)
+                                username = str(params.get(Words.ParamKeys.CheckInfo.USERNAME))
+                                params = self.developer_db[username]["uploaded_games"]
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS, params)
                             case _:
                                 self.send_response(passer, msg_id, Words.Result.FAILURE, 
                                                    {Words.ParamKeys.Failure.REASON: "Invalid command"})
@@ -327,6 +514,30 @@ class DatabaseServer:
                 self.send_response(passer, msg_id, Words.Result.FAILURE, 
                                             {Words.ParamKeys.Failure.REASON: "Error occurred in database server."})
                 print(f"[DatabaseServer] Exception occurred in handle_developer: {e}")
+
+    def handle_upload(self, server_sock: socket.socket):
+        sock, addr = server_sock.accept()
+        print(f"accepted connection in handle_upload: {addr}")
+        server_sock.close()
+        with self.upload_lock:
+            game_id = str(self.upload_params.get(Words.ParamKeys.Metadata.GAME_ID))
+            version = str(self.upload_params.get(Words.ParamKeys.Metadata.VERSION))
+            file_name = str(self.upload_params.get(Words.ParamKeys.Metadata.FILE_NAME))
+            game_file_path = GAME_FOLDER / game_id / version / file_name
+        if not isinstance(game_file_path, Path):
+            print("game_file_path is not Path. Closing sock...")
+            with self.upload_lock:
+                self.upload_params.clear()
+            sock.close()
+            return
+        file_receiver = FileReceiver(sock, game_file_path)
+        success = file_receiver.receive()
+        if not success:
+            print("Warning: file receive not success.")
+        file_receiver.close()
+        with self.upload_lock:
+            self.upload_params["upload_done"] = True
+        print("exited handle_upload")
 
     def _verify_player_credential(self, username, password) -> tuple[bool, str]:
         if not username:
@@ -410,8 +621,17 @@ class DatabaseServer:
             "password": password, 
             "create_time": time.time(), 
             "last_login_time": None, 
-            "online": False
+            "online": False, 
+            "uploaded_games": {}
         }
+        self.save_developer_db()
+
+    def add_developer_uploaded_games(self, username: str, game_id: str, game_name: str, version: str):
+        if username not in self.developer_db:
+            return
+        self.developer_db[username]["uploaded_games"][game_id] = {Words.ParamKeys.Metadata.GAME_NAME: game_name, 
+                                                                  Words.ParamKeys.Metadata.VERSION: version, 
+                                                                  "last_update": time.time()}
         self.save_developer_db()
 
     def start(self) -> None:

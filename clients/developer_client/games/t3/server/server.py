@@ -6,13 +6,12 @@ from typing import Callable, Any
 
 class GameServer:
     # host and port fields are essential. You can modify it but don't erase it.
-    def __init__(self, host: str = "0.0.0.0", port: int = 12345) -> None:
+    def __init__(self, host: str = "0.0.0.0", port: int = 0) -> None:
         self.host = host
         self.port = port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.clients: set[socket.socket] = set()
         self.on_close: Callable[[], None] | None = None
-        self.stop_event = threading.Event()
 
     # This Method is essential. You can modify it but don't erase it.
     def start(self):
@@ -20,17 +19,11 @@ class GameServer:
         self.sock.listen(16)
         self.sock.settimeout(1.0)
         self.port = self.sock.getsockname()[1]
-        threading.Thread(target=self._accept_loop).start()
+        threading.Thread(target=self._accept_loop, daemon=True).start()
         print(f"[GameServer] listening on {self.host}:{self.port}")
-        while True:
-            cmd = input("Enter 'stop' to stop: ")
-            if cmd == 'stop':
-                self.stop()
-                break
 
     # This Method is essential. You can modify it but don't erase it.
     def stop(self):
-        self.stop_event.set()
         try:
             for c in list(self.clients):
                 try:
@@ -54,10 +47,9 @@ class GameServer:
                     pass
 
     def _accept_loop(self):
-        while not self.stop_event.is_set():
+        while True:
             try:
                 conn, addr = self.sock.accept()
-                print(f"accepted: {addr}")
                 self.clients.add(conn)
                 threading.Thread(target=self._handle_client, args=(conn, addr), daemon=True).start()
             except socket.timeout:
@@ -89,7 +81,6 @@ class GameServer:
                 conn.close()
             except Exception:
                 pass
-            print("connection closed")
 
     def _process(self, user: str, msg: dict) -> dict:
         cmd = msg.get("cmd")

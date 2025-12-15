@@ -22,12 +22,15 @@ class Words:
     class Command:
         SYNC_LOBBY_STATUS = 'sync_lobby_status'
         GET_PLAYER_ROOM_STATUS = 'get_player_room_status'
+        CHECK_MY_WORKS = 'check_my_works'
+        CHECK_DEV_WORKS = 'check_dev_works'
         LOGIN = 'login'
         LOGOUT = 'logout'
         REGISTER = 'register'
         EXIT = 'exit'
         UPLOAD_START = 'upload_start'
         UPLOAD_END = 'upload_end'
+        CHECK_GAME_VALID = 'check_game_valid'
     class EventName:
         PLAYER_ONLINE = 'player_online'
         PLAYER_OFFLINE = 'player_offline'
@@ -62,6 +65,18 @@ class Words:
             ROOMS = 'rooms'
         class Success:
             PORT = 'port'
+        class Metadata:
+            GAME_ID = 'game_id'
+            GAME_NAME = 'game_name'
+            VERSION = 'version'
+            UPLOADER = 'uploader'
+            FILE_NAME = 'file_name'
+            SIZE = 'size'
+            SHA256 = 'sha256'
+            # for version controling metadata
+            ALL_VERSIONS = 'all_versions'
+        class CheckInfo:
+            USERNAME = 'username'
     class Roles:
         PLAYER = 'player'
         DEVELOPER = 'developer'
@@ -70,4 +85,4 @@ class Words:
     class Result:
         SUCCESS = 'success'
         FAILURE = 'failure'
-        
+    

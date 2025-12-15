@@ -108,7 +108,25 @@ class DeveloperClientWindow(ClientWindowBase):
             self.developer_notion_text.place(relx=0.0, rely=0.0)
 
     def show_tab(self, name: str):
-        pass
+        if name == "My Works":
+            self.check_my_works()
+
+    def check_my_works(self):
+        threading.Thread(target=self._check_my_works_thread, daemon=True).start()
+
+    def _check_my_works_thread(self):
+        assert isinstance(self.client, DeveloperClient)
+        success, params = self.client.try_check_my_works()
+        self.app.after(0, self._on_check_my_works_ui, success, params)
+
+    def _on_check_my_works_ui(self, success: bool, params: dict):
+        if success:
+            gid_list = list(params.keys())
+            def delete(gid: str):
+                print(f"delete {gid}")
+            self.works_list.set_items([(gid, gid) for gid in gid_list], lambda s: [("delete123", lambda: delete(s), True)])
+        else:
+            print(f"failed. {params}")
 
     def _on_create_template(self) -> None:
         """Prompt for template metadata and run the scaffold script in background."""
@@ -225,7 +243,7 @@ class DeveloperClientWindow(ClientWindowBase):
                     return
 
                 # must-have files at expected locations
-                required = ["config.json", "client/client.py", "server/server.py"]
+                required = ["config.json", "client/__main__.py", "server/__main__.py"]
                 missing = [r for r in required if r not in names]
                 if missing:
                     self._notify_error(f"Missing required files: {', '.join(missing)}")

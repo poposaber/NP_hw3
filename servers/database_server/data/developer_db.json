@@ -2,13 +2,26 @@
   "barry": {
     "password": "deveqwert",
     "create_time": 1765446315.243238,
-    "last_login_time": 1765732380.8098357,
-    "online": false
+    "last_login_time": 1765817394.234994,
+    "online": false,
+    "uploaded_games": {
+      "thisisid": {
+        "game_name": "newgame",
+        "version": "0.1.0",
+        "last_update": 1765815347.218354
+      },
+      "t3": {
+        "game_name": "test3",
+        "version": "0.1.2",
+        "last_update": 1765815600.329086
+      }
+    }
   },
   "trying": {
     "password": "nottocry",
     "create_time": 1765553553.3366542,
-    "last_login_time": 1765688938.437133,
-    "online": false
+    "last_login_time": 1765806503.6998765,
+    "online": false,
+    "uploaded_games": {}
   }
 }

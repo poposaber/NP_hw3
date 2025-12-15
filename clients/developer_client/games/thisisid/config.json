@@ -1,0 +1,8 @@
+{
+  "id": "thisisid",
+  "name": "newgame", 
+  "version": "0.1.0", 
+  "author": "stillbarry",
+  "min_players": 1,
+  "max_players": 4
+}

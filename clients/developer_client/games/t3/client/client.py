@@ -5,7 +5,7 @@ from typing import Optional
 
 class GameClient:
     # host and port fields are essential. You can modify it but don't erase it.
-    def __init__(self, host: str = "127.0.0.1", port: int = 12345):
+    def __init__(self, host: str, port: int):
         self.host = host
         self.port = port
         self.sock: Optional[socket.socket] = None
@@ -22,7 +22,7 @@ class GameClient:
         print("greeting:", line)
 
         # send ping every second
-        for i in range(5):
+        for i in range(3):
             f.write(json.dumps({"cmd": "ping"}).encode() + b"\n")
             f.flush()
             line = f.readline()
@@ -30,7 +30,6 @@ class GameClient:
                 break
             print("resp:", line)
             time.sleep(1)
-        self.stop()
 
     # This Method is essential. You can modify it but don't erase it.
     def stop(self):

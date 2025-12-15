@@ -1,0 +1,12 @@
+{
+  "game_id": "thisisid",
+  "game_name": "newgame",
+  "version": "0.1.0",
+  "uploader": "barry",
+  "file_name": "ohoh.zip",
+  "size": 12566,
+  "sha256": "9a7f0ed329a2a726b797a524a748868541eb3614e7db14f3a16beaafe16f66e9",
+  "all_versions": [
+    "0.1.0"
+  ]
+}
