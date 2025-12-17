@@ -53,12 +53,12 @@ class DeveloperClientWindow(ClientWindowBase):
                                                                                     "- The minimum structure of .zip file: \n" \
                                                                                     "   xxx.zip\n" \
                                                                                     "       client\n" \
-                                                                                    "           client.py\n" \
+                                                                                    "           __main__.py\n" \
                                                                                     "       server\n" \
-                                                                                    "           server.py\n" \
+                                                                                    "           __main__.py\n" \
                                                                                     "       config.json\n" \
-                                                                                    "- client.py should contain a class GameClient(host, port)\n" \
-                                                                                    "- server.py should contain a class GameServer(host, port)", 
+                                                                                    "- The config.json should contain at least the following fields:\n" \
+                                                                                    "id, name, version, author, players\n",  
                                                                                     font=("Arial", 15), 
                                                                                     anchor=tkinter.W,
                                                                                     justify=tkinter.LEFT,
@@ -100,7 +100,8 @@ class DeveloperClientWindow(ClientWindowBase):
         super()._on_login_result_ui(success, params)
         if success:
             self.developer_notion_text.place_forget()
-            self.account_name_label.configure(text=self._username)
+            self.account_name_label.configure(text=self.client.username)
+            self.check_my_works()
 
     def _on_logout_result_ui(self, success, params):
         super()._on_logout_result_ui(success, params)
@@ -121,10 +122,10 @@ class DeveloperClientWindow(ClientWindowBase):
 
     def _on_check_my_works_ui(self, success: bool, params: dict):
         if success:
-            gid_list = list(params.keys())
+            # gid_list = list(params.keys())
             def delete(gid: str):
-                print(f"delete {gid}")
-            self.works_list.set_items([(gid, gid) for gid in gid_list], lambda s: [("delete123", lambda: delete(s), True)])
+                print(f"delete {gid} not implemented")
+            self.works_list.set_items([(gid, params[gid][Words.ParamKeys.Metadata.GAME_NAME]) for gid in params], lambda s: [("delete123", lambda: delete(s), True)])
         else:
             print(f"failed. {params}")
 
@@ -212,241 +213,7 @@ class DeveloperClientWindow(ClientWindowBase):
             self._notify_info("Upload completed.")
         else:
             self._notify_error(f"Upload failed. Reason: {params.get(Words.ParamKeys.Failure.REASON, "unknown")}")
-        self.upload_btn.configure(state="normal") 
-
-    def _run_upload_chunked(self, zip_path: Path) -> None:
-        def _sha256_file(path: Path) -> str:
-            h = hashlib.sha256()
-            with path.open("rb") as f:
-                for b in iter(lambda: f.read(1024 * 1024), b""):
-                    h.update(b)
-            return h.hexdigest()
-
-        def _is_safe(name: str) -> bool:
-            p = Path(name)
-            return not p.is_absolute() and (".." not in p.parts)
-
-        try:
-            size = zip_path.stat().st_size
-            sha256 = _sha256_file(zip_path)
-            # Defaults if manifest is missing fields
-            game_id = zip_path.stem
-            version = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-
-            # Strict validation against your template rules
-            with zipfile.ZipFile(zip_path, "r") as z:
-                names = z.namelist()
-                # path safety
-                bad = [n for n in names if not _is_safe(n)]
-                if bad:
-                    self._notify_error(f"Unsafe paths in zip: {bad[:3]}...")
-                    return
-
-                # must-have files at expected locations
-                required = ["config.json", "client/__main__.py", "server/__main__.py"]
-                missing = [r for r in required if r not in names]
-                if missing:
-                    self._notify_error(f"Missing required files: {', '.join(missing)}")
-                    return
-
-                # parse config.json at root
-                try:
-                    manifest = json.loads(z.read("config.json").decode("utf-8"))
-                except Exception as e:
-                    self._notify_error(f"Invalid config.json: {e}")
-                    return
-
-                game_id = manifest.get("id") or game_id
-                version = manifest.get("version") or version
-
-                # Optional sanity: check server/client module names
-                # server_module = manifest.get("server_module")
-                # client_module = manifest.get("client_module")
-
-            # Start request
-            assert isinstance(self.client, DeveloperClient) and self.client.worker is not None
-            start_resp = self.client.worker.pend_and_wait(
-                Words.MessageType.REQUEST,
-                {
-                    Words.DataKeys.Request.COMMAND: Words.Command.UPLOAD_START,
-                    Words.DataKeys.PARAMS: {
-                        "game_id": game_id,
-                        "version": version,
-                        "filename": zip_path.name,
-                        "size": size,
-                        "sha256": sha256,
-                        # Optional: echo manifest details for server-side validation
-                        # "manifest": {"min_players": manifest.get("min_players"), "max_players": manifest.get("max_players")}
-                    },
-                },
-                self.client.server_response_timeout,
-            )
-            if start_resp.get(Words.DataKeys.Response.RESULT) != Words.Result.SUCCESS:
-                params = start_resp.get(Words.DataKeys.PARAMS) or {}
-                reason = params.get(Words.ParamKeys.Failure.REASON, "Upload start rejected")
-                self._notify_error(reason)
-                return
-
-            # Chunked streaming (<= 65536 per frame: header + chunk)
-            CHUNK_MAX = 60 * 1024
-            passer = self.client.worker.passer
-            seq = 0
-            with zip_path.open("rb") as f:
-                while True:
-                    chunk = f.read(CHUNK_MAX)
-                    if not chunk:
-                        break
-                    passer.send_chunk(seq, chunk)
-                    seq += 1
-                passer.send_chunk(seq, None)
-
-            # End request
-            end_resp = self.client.worker.pend_and_wait(
-                Words.MessageType.REQUEST,
-                {
-                    Words.DataKeys.Request.COMMAND: Words.Command.UPLOAD_END,
-                    Words.DataKeys.PARAMS: {
-                        "game_id": game_id,
-                        "version": version,
-                        "filename": zip_path.name,
-                        "last_seq": seq,
-                        "sha256": sha256,
-                        "size": size,
-                    },
-                },
-                self.client.server_response_timeout,
-            )
-            if end_resp.get(Words.DataKeys.Response.RESULT) == Words.Result.SUCCESS:
-                self._notify_info(f"Upload complete: {game_id} v{version}")
-            else:
-                params = end_resp.get(Words.DataKeys.PARAMS) or {}
-                reason = params.get(Words.ParamKeys.Failure.REASON, "Upload end failed")
-                self._notify_error(reason)
-        except TimeoutError:
-            self._notify_error("Upload timed out")
-        except ConnectionError as e:
-            self._notify_error(f"Connection error: {e}")
-        except Exception as e:
-            self._notify_error(f"Upload error: {e}")
-        finally:
-            try:
-                self.app.after(0, lambda: self.upload_btn.configure(state="normal"))
-            except Exception:
-                pass
-
-    # def _run_upload_chunked(self, zip_path: Path) -> None:
-    #     """
-    #     Protocol:
-    #       - REQUEST: UPLOAD_START {game_id, version, filename, size, sha256}
-    #       - RAW: length-prefixed frames for each chunk:
-    #         frame = struct.pack("!I", len(json_header) + len(chunk)) + json_header + chunk
-    #         where json_header = b'{"type":"UPLOAD_CHUNK","seq":n,"size":len(chunk)}'
-    #       - REQUEST: UPLOAD_END {seq_last}
-    #     Server should respond SUCCESS/FAILURE to START and END; CHUNKs are fire-and-forget.
-    #     """
-    #     def _sha256_file(path: Path) -> str:
-    #         h = hashlib.sha256()
-    #         with path.open("rb") as f:
-    #             for b in iter(lambda: f.read(1024 * 1024), b""):
-    #                 h.update(b)
-    #         return h.hexdigest()
-        
-    #     try:
-    #         # basic checks and manifest hints
-    #         size = zip_path.stat().st_size
-    #         sha256 = _sha256_file(zip_path)
-    #         game_id = zip_path.stem
-    #         version = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-
-    #         # optional: peek config.json inside zip for id/version
-    #         try:
-    #             with zipfile.ZipFile(zip_path, "r") as z:
-    #                 candidates = [n for n in z.namelist() if n.endswith("config.json") or n.endswith("manifest.json")]
-    #                 if candidates:
-    #                     c = min(candidates, key=lambda s: s.count("/"))
-    #                     data = json.loads(z.read(c).decode("utf-8"))
-    #                     game_id = data.get("id") or game_id
-    #                     version = data.get("version") or version
-    #         except Exception:
-    #             pass
-
-    #         # start request via client worker
-    #         assert isinstance(self.client, DeveloperClient) and self.client.worker is not None
-    #         start_resp = self.client.worker.pend_and_wait(
-    #             Words.MessageType.REQUEST,
-    #             {
-    #                 Words.DataKeys.Request.COMMAND: Words.Command.UPLOAD_START,
-    #                 Words.DataKeys.PARAMS: {
-    #                     "game_id": game_id,
-    #                     "version": version,
-    #                     "filename": zip_path.name,
-    #                     "size": size,
-    #                     "sha256": sha256,
-    #                 },
-    #             },
-    #             self.client.lobby_response_timeout,
-    #         )
-    #         if start_resp.get(Words.DataKeys.Response.RESULT) != Words.Result.SUCCESS:
-    #             params = start_resp.get(Words.DataKeys.PARAMS) or {}
-    #             reason = params.get(Words.ParamKeys.Failure.REASON, "Upload start rejected")
-    #             self._notify_error(reason)
-    #             return
-
-    #         # stream chunks using MessageFormatPasser (max raw frame <= 65536)
-    #         # header + chunk must be <= LENGTH_LIMIT (65536)
-    #         CHUNK_MAX = 60 * 1024  # 60KB to leave room for header
-    #         passer = self.client.worker.passer  # underlying MessageFormatPasser
-    #         seq = 0
-    #         with zip_path.open("rb") as f:
-    #             while True:
-    #                 chunk = f.read(CHUNK_MAX)
-    #                 if not chunk:
-    #                     break
-    #                 header = json.dumps({"type": "UPLOAD_CHUNK", "seq": seq, "size": len(chunk)}).encode("utf-8")
-    #                 frame = header + chunk
-    #                 # send as one raw frame (MessageFormatPasser adds 4-byte length prefix)
-    #                 # ensure single frame size fits limit
-    #                 if len(frame) > 65536:
-    #                     self._notify_error(f"Internal frame too large: {len(frame)} bytes")
-    #                     return
-    #                 passer.send_raw(frame)
-    #                 seq += 1
-
-    #         # end request
-    #         end_resp = self.client.worker.pend_and_wait(
-    #             Words.MessageType.REQUEST,
-    #             {
-    #                 Words.DataKeys.Request.COMMAND: Words.Command.UPLOAD_END,
-    #                 Words.DataKeys.PARAMS: {
-    #                     "game_id": game_id,
-    #                     "version": version,
-    #                     "filename": zip_path.name,
-    #                     "last_seq": seq - 1,
-    #                     "sha256": sha256,
-    #                     "size": size,
-    #                 },
-    #             },
-    #             self.client.lobby_response_timeout,
-    #         )
-    #         if end_resp.get(Words.DataKeys.Response.RESULT) == Words.Result.SUCCESS:
-    #             self._notify_info(f"Upload complete: {game_id} v{version}")
-    #         else:
-    #             params = end_resp.get(Words.DataKeys.PARAMS) or {}
-    #             reason = params.get(Words.ParamKeys.Failure.REASON, "Upload end failed")
-    #             self._notify_error(reason)
-    #     except TimeoutError:
-    #         self._notify_error("Upload timed out")
-    #     except ConnectionError as e:
-    #         self._notify_error(f"Connection error: {e}")
-    #     except Exception as e:
-    #         self._notify_error(f"Upload error: {e}")
-    #     finally:
-    #         try:
-    #             self.app.after(0, lambda: self.upload_btn.configure(state="normal"))
-    #         except Exception:
-    #             pass
-
-        
+        self.upload_btn.configure(state="normal")  
 
     def _notify_info(self, message: str) -> None:
         def _show():

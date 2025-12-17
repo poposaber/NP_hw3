@@ -61,6 +61,7 @@ class DeveloperClient(ClientBase):
             game_id = path.stem
             version = "0.1.0"
             game_name = game_id
+            players = 0
 
             # Strict validation against your template rules
             with zipfile.ZipFile(path, "r") as z:
@@ -85,6 +86,7 @@ class DeveloperClient(ClientBase):
                 game_id = manifest.get("id") or game_id
                 version = manifest.get("version") or version
                 game_name = manifest.get("name") or game_name
+                players = manifest.get("players") or players
 
             # start sending
             assert self.worker is not None
@@ -95,6 +97,7 @@ class DeveloperClient(ClientBase):
                             Words.ParamKeys.Metadata.GAME_NAME: game_name, 
                             Words.ParamKeys.Metadata.VERSION: version,
                             Words.ParamKeys.Metadata.FILE_NAME: path.name,
+                            Words.ParamKeys.Metadata.PLAYERS: players, 
                             Words.ParamKeys.Metadata.SIZE: size,
                             Words.ParamKeys.Metadata.SHA256: sha256,
                             # Optional: echo manifest details for server-side validation

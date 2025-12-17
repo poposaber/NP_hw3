@@ -2,7 +2,7 @@
   "barry": {
     "password": "deveqwert",
     "create_time": 1765446315.243238,
-    "last_login_time": 1765817394.234994,
+    "last_login_time": 1765952870.5575626,
     "online": false,
     "uploaded_games": {
       "thisisid": {
@@ -14,14 +14,25 @@
         "game_name": "test3",
         "version": "0.1.2",
         "last_update": 1765815600.329086
+      },
+      "withpl": {
+        "game_name": "withplayers",
+        "version": "0.1.0",
+        "last_update": 1765901896.6042037
       }
     }
   },
   "trying": {
     "password": "nottocry",
     "create_time": 1765553553.3366542,
-    "last_login_time": 1765806503.6998765,
+    "last_login_time": 1765996930.7929912,
     "online": false,
-    "uploaded_games": {}
+    "uploaded_games": {
+      "bigskill": {
+        "game_name": "Big Skill",
+        "version": "1.0.0",
+        "last_update": 1765999103.0375688
+      }
+    }
   }
 }

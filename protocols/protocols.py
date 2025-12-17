@@ -30,10 +30,19 @@ class Words:
         EXIT = 'exit'
         UPLOAD_START = 'upload_start'
         UPLOAD_END = 'upload_end'
+        DOWNLOAD_START = 'download_start'
         CHECK_GAME_VALID = 'check_game_valid'
+        CHECK_STORE = 'check_store'
+        CREATE_ROOM = 'create_room'
+        JOIN_ROOM = 'join_room'
+        LEAVE_ROOM = 'leave_room'
+        START_GAME = 'start_game'
     class EventName:
         PLAYER_ONLINE = 'player_online'
         PLAYER_OFFLINE = 'player_offline'
+        GAME_FETCHED = 'game_fetched'
+        GAME_STARTED = 'game_started'
+        ROOM_UPDATED = 'room_updated'
     class DataKeys:
         PARAMS = 'params'
         class Handshake:
@@ -73,10 +82,22 @@ class Words:
             FILE_NAME = 'file_name'
             SIZE = 'size'
             SHA256 = 'sha256'
+            PLAYERS = 'players'
             # for version controling metadata
             ALL_VERSIONS = 'all_versions'
+        class StoreStatus:
+            GAMES = 'games'
         class CheckInfo:
             USERNAME = 'username'
+        class Room:
+            ROOM_NAME = 'room_name'
+            USERNAME = 'username'
+            GAME_ID = 'game_id'
+            OWNER = 'owner'
+            PLAYER_LIST = 'player_list'
+            EXPECTED_PLAYERS = 'expected_players'
+            IS_PLAYING = 'is_playing'
+            NOW_ROOM_DATA = 'now_room_data'
     class Roles:
         PLAYER = 'player'
         DEVELOPER = 'developer'

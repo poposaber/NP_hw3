@@ -193,7 +193,8 @@ class DeveloperServer(ServerBase):
                                 size = params.get(Words.ParamKeys.Metadata.SIZE)
                                 sha256 = params.get(Words.ParamKeys.Metadata.SHA256)
                                 game_name = params.get(Words.ParamKeys.Metadata.GAME_NAME)
-                                if not (game_id and version and file_name and isinstance(size, int) and sha256 and game_name):
+                                players = params.get(Words.ParamKeys.Metadata.PLAYERS)
+                                if not (game_id and version and file_name and isinstance(size, int) and sha256 and game_name and isinstance(players, int)):
                                     self.send_response(passer, msg_id, Words.Result.FAILURE, {
                                         Words.ParamKeys.Failure.REASON: "Missing upload metadata"
                                     })
@@ -241,6 +242,7 @@ class DeveloperServer(ServerBase):
                                         Words.ParamKeys.Metadata.GAME_ID: game_id,
                                         Words.ParamKeys.Metadata.VERSION: version,
                                         Words.ParamKeys.Metadata.GAME_NAME: game_name, 
+                                        Words.ParamKeys.Metadata.PLAYERS: players, 
                                         "upload_done": False
                                     }
                                 temp_server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -297,6 +299,7 @@ class DeveloperServer(ServerBase):
                                         Words.ParamKeys.Metadata.VERSION: st[Words.ParamKeys.Metadata.VERSION],
                                         Words.ParamKeys.Metadata.UPLOADER: self.passer_developer_dict.get(passer), 
                                         Words.ParamKeys.Metadata.FILE_NAME: st[Words.ParamKeys.Metadata.FILE_NAME],
+                                        Words.ParamKeys.Metadata.PLAYERS: st[Words.ParamKeys.Metadata.PLAYERS], 
                                         Words.ParamKeys.Metadata.SIZE: st[Words.ParamKeys.Metadata.SIZE],
                                         Words.ParamKeys.Metadata.SHA256: st[Words.ParamKeys.Metadata.SHA256],
                                     }

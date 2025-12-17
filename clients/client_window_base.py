@@ -23,7 +23,7 @@ class ClientWindowBase:
         #                            on_connection_lost=self._on_client_connection_lost)
         self.client = client
 
-        self._username: Optional[str] = None
+        # self._username: Optional[str] = None
         
         self.window_thread: Optional[threading.Thread] = None
         self.window_stop_event = threading.Event()
@@ -58,6 +58,7 @@ class ClientWindowBase:
         self.login_btn.place(relx=0.5, rely=0.8, anchor=tkinter.CENTER)
         self.reg_prompt_text = customtkinter.CTkLabel(master=self.login_frame, text="Don't have an account?", font=("Arial", 11))
         self.reg_prompt_text.place(relx=0.65, rely=0.95, anchor=tkinter.CENTER)
+        
 
         self.go_to_reg_label = customtkinter.CTkLabel(
             master=self.login_frame,
@@ -236,8 +237,8 @@ class ClientWindowBase:
 
     def logout_thread(self):
         success, params = self.client.try_logout()
-        if success:
-            self._username = None
+        # if success:
+        #     self._username = None
         try:
             self.app.after(0, self._on_logout_result_ui, success, params)
         except Exception as e:
@@ -266,7 +267,7 @@ class ClientWindowBase:
 
     def login_thread(self, username: str, password: str):
         success, params = self.client.try_login(username, password)
-        self._username = username if success else None
+        # self._username = username if success else None
         try:
             self.app.after(0, self._on_login_result_ui, success, params)
         except Exception as e:

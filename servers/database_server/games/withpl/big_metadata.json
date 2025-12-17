@@ -1,0 +1,13 @@
+{
+  "game_id": "withpl",
+  "game_name": "withplayers",
+  "version": "0.1.0",
+  "uploader": "barry",
+  "file_name": "withplay.zip",
+  "players": 2,
+  "size": 11292,
+  "sha256": "8c5a8073d8ee6eeca96a1ebf61fd1e9ab40bf58bf037db6d639a6557322e28de",
+  "all_versions": [
+    "0.1.0"
+  ]
+}

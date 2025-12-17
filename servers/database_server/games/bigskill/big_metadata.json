@@ -1,0 +1,19 @@
+{
+  "game_id": "bigskill",
+  "game_name": "Big Skill",
+  "version": "1.0.0",
+  "uploader": "trying",
+  "file_name": "bs7.zip",
+  "players": 2,
+  "size": 41599,
+  "sha256": "63bebbfbc2c33dcca6ed9b78811f212cd4eb034850fb7a0c912d841ff9004d90",
+  "all_versions": [
+    "0.1.0",
+    "0.1.1",
+    "0.1.2",
+    "0.1.3",
+    "0.1.4",
+    "0.1.5",
+    "1.0.0"
+  ]
+}

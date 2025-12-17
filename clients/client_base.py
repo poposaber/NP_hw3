@@ -57,6 +57,7 @@ class ClientBase:
         # self.connection_loss_event.set()
 
         self.thread: Optional[threading.Thread] = None
+        self.username: str | None = None
         # self.send_msg_thread: Optional[threading.Thread] = None
         # self.receive_msg_thread: Optional[threading.Thread] = None
         # self.heartbeat_thread: Optional[threading.Thread] = None
@@ -143,6 +144,7 @@ class ClientBase:
             return (False, {'error': str(e)})
         if response[Words.DataKeys.Response.RESULT] != Words.Result.SUCCESS:
             return (False, response[Words.DataKeys.PARAMS])
+        self.username = username
         return (True, {})
     
     def try_logout(self) -> tuple[bool, dict]:
@@ -155,6 +157,7 @@ class ClientBase:
             return (False, {'error': str(e)})
         if response[Words.DataKeys.Response.RESULT] != Words.Result.SUCCESS:
             return (False, response[Words.DataKeys.PARAMS])
+        self.username = None
         return (True, {})
     
     def try_register(self, username: str, password: str) -> tuple[bool, dict]:

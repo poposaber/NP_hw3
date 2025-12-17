@@ -14,6 +14,7 @@ from pathlib import Path
 from base.file_receiver import FileReceiver
 import hashlib
 from base.file_checker import FileChecker
+from base.file_sender import FileSender
 
 DEFAULT_ACCEPT_TIMEOUT = 1.0
 DEFAULT_RECEIVE_TIMEOUT = 1.0
@@ -209,8 +210,39 @@ class DatabaseServer:
                                     self.send_response(passer, msg_id, Words.Result.FAILURE, 
                                                        {Words.ParamKeys.Failure.REASON: "Missing username."})
                                     continue
+                                room_id = None
+                                try:
+                                    room_id = self.player_db[username].get("current_room")
+                                except Exception:
+                                    room_id = None
+
+                                if room_id and room_id in self.room_db:
+                                    players = self.room_db[room_id].get("player_list") or []
+                                    if username in players:
+                                        try:
+                                            players.remove(username)
+                                        except ValueError:
+                                            # already not in list
+                                            pass
+                                    # update or remove room
+                                    if not players:
+                                        self.room_db.pop(room_id, None)
+                                    else:
+                                        # assign new owner if needed
+                                        room_owner = self.room_db[room_id].get("owner")
+                                        if room_owner == username:
+                                            self.room_db[room_id]["owner"] = players[0]
+                                        self.room_db[room_id]["player_list"] = players
+                                    self.save_room_db()
+
+                                now_room_data = self.room_db.get(room_id)
+
                                 self._set_player_offline(username)
-                                self.send_response(passer, msg_id, Words.Result.SUCCESS)
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS, {
+                                    Words.ParamKeys.Room.ROOM_NAME: room_id,
+                                    Words.ParamKeys.Room.NOW_ROOM_DATA: now_room_data
+                                })
+                                
                             case Words.Command.REGISTER:
                                 assert isinstance(params, dict)
                                 username = params.get(Words.ParamKeys.Register.USERNAME)
@@ -229,7 +261,176 @@ class DatabaseServer:
                                 else:
                                     self.send_response(passer, msg_id, Words.Result.FAILURE, 
                                                        {Words.ParamKeys.Failure.REASON: "Username used by others"})
+                            case Words.Command.DOWNLOAD_START:
+                                try:
+                                    assert isinstance(params, dict)
+                                    game_id = str(params.get(Words.ParamKeys.Metadata.GAME_ID))
+                                    game_dir = GAME_FOLDER / game_id
+                                    if not game_dir.exists():
+                                        self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                            Words.ParamKeys.Failure.REASON: f"game_id {game_id} not found."
+                                        })
+                                        continue
+                                    big_meta_dir = game_dir / "big_metadata.json"
+                                    if not big_meta_dir.exists():
+                                        self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                            Words.ParamKeys.Failure.REASON: f"big_metadata.json in game_id {game_id} not found."
+                                        })
+                                        continue
+                                    with open(big_meta_dir, "rb") as rf:
+                                        big_meta = json.load(rf)
+                                    assert isinstance(big_meta, dict)
+                                    latest_version = str(big_meta.get(Words.ParamKeys.Metadata.VERSION))
+                                    file_name = str(big_meta.get(Words.ParamKeys.Metadata.FILE_NAME))
+                                    game_file_dir = game_dir / latest_version / file_name
+                                    if not game_file_dir.exists():
+                                        self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                            Words.ParamKeys.Failure.REASON: f"game file of latest version not found."
+                                        })
+                                        continue
+                                    temp_server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                    temp_server_sock.bind(("0.0.0.0", 0))
+                                    temp_server_sock.listen(1)
+                                    port = temp_server_sock.getsockname()[1]
+                                    self.send_response(passer, msg_id, Words.Result.SUCCESS, {
+                                        Words.ParamKeys.Success.PORT: port
+                                    })
+                                    threading.Thread(target=self.handle_download, args=(temp_server_sock, game_file_dir), daemon=True).start()
+                                except Exception as e:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE,
+                                                       {Words.ParamKeys.Failure.REASON: f"Exception calling download_start: {str(e)}"})
 
+                            case Words.Command.CHECK_STORE:
+                                result_dict = self.check_game_folder()
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS, result_dict)
+                            case Words.Command.CREATE_ROOM:
+                                assert isinstance(params, dict)
+                                room_name = params.get(Words.ParamKeys.Room.ROOM_NAME)
+                                game_id = str(params.get(Words.ParamKeys.Room.GAME_ID))
+                                username = params.get(Words.ParamKeys.Room.USERNAME)
+                                if not (room_name and username and game_id):
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: "missing fields"
+                                    })
+                                    continue
+                                if room_name in self.room_db:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: "room name occupied by others"
+                                    })
+                                    continue
+                                big_meta_dir = GAME_FOLDER / game_id / "big_metadata.json"
+                                with open(big_meta_dir, "rb") as rf:
+                                    big_meta = json.load(rf)
+
+                                assert isinstance(big_meta, dict)
+                                players = big_meta.get(Words.ParamKeys.Metadata.PLAYERS)
+
+                                self.room_db[room_name] = {
+                                    Words.ParamKeys.Room.OWNER: username, 
+                                    Words.ParamKeys.Room.GAME_ID: game_id, 
+                                    Words.ParamKeys.Room.PLAYER_LIST: [username], 
+                                    Words.ParamKeys.Room.EXPECTED_PLAYERS: players, 
+                                    Words.ParamKeys.Room.IS_PLAYING: False
+                                }
+                                self.save_room_db()
+                                self.player_db[username]["current_room"] = room_name
+                                self.save_player_db()
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS, {
+                                    Words.ParamKeys.Room.EXPECTED_PLAYERS: players
+                                })
+                            case Words.Command.JOIN_ROOM:
+                                assert isinstance(params, dict)
+                                room_name = params.get(Words.ParamKeys.Room.ROOM_NAME)
+                                username = params.get(Words.ParamKeys.Room.USERNAME)
+                                if not (room_name and username):
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: "missing fields"
+                                    })
+                                    continue
+                                now_room = self.room_db.get(room_name)
+                                if now_room is None:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: 'room not found'})
+                                    continue
+                                players = now_room.get(Words.ParamKeys.Room.PLAYER_LIST) or []
+                                expected = now_room.get(Words.ParamKeys.Room.EXPECTED_PLAYERS) or 0
+                                if username in players:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: "already in room"
+                                    })
+                                    continue
+                                if len(players) >= expected:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: "room full"
+                                    })
+                                    continue
+                                players.append(username)
+                                now_room[Words.ParamKeys.Room.PLAYER_LIST] = players
+                                self.room_db[room_name] = now_room
+                                self.save_room_db()
+                                self.player_db[username]["current_room"] = room_name
+                                self.save_player_db()
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS)
+                            case Words.Command.LEAVE_ROOM:
+                                assert isinstance(params, dict)
+                                room_name = params.get(Words.ParamKeys.Room.ROOM_NAME)
+                                username = params.get(Words.ParamKeys.Room.USERNAME)
+                                if not (room_name and username):
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: "missing fields"
+                                    })
+                                    continue
+                                now_room = self.room_db.get(room_name)
+                                if now_room is None:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: 'room not found'})
+                                    continue
+                                players = now_room.get(Words.ParamKeys.Room.PLAYER_LIST) or []
+                                if username not in players:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: 'not in room'})
+                                    continue
+                                # remove player
+                                players = [p for p in players if p != username]
+                                now_room[Words.ParamKeys.Room.PLAYER_LIST] = players
+                                # if owner left, assign new owner or remove room
+                                owner = now_room.get(Words.ParamKeys.Room.OWNER)
+                                if owner == username:
+                                    if players:
+                                        now_room[Words.ParamKeys.Room.OWNER] = players[0]
+                                    else:
+                                        # remove empty room
+                                        self.room_db.pop(room_name, None)
+                                        self.save_room_db()
+                                        self.send_response(passer, msg_id, Words.Result.SUCCESS, {
+                                            Words.ParamKeys.Room.ROOM_NAME: room_name,
+                                            Words.ParamKeys.Room.NOW_ROOM_DATA: None
+                                        })
+                                        continue
+                                self.room_db[room_name] = now_room
+                                self.save_room_db()
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS, {
+                                    Words.ParamKeys.Room.ROOM_NAME: room_name,
+                                    Words.ParamKeys.Room.NOW_ROOM_DATA: now_room
+                                })
+                            case Words.Command.START_GAME:
+                                assert isinstance(params, dict)
+                                room_name = params.get(Words.ParamKeys.Room.ROOM_NAME)
+                                if not room_name:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: "missing room_name"
+                                    })
+                                    continue
+                                now_room = self.room_db.get(room_name)
+                                if now_room is None:
+                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                                        Words.ParamKeys.Failure.REASON: "room not found"
+                                    })
+                                    continue
+                                now_room[Words.ParamKeys.Room.IS_PLAYING] = True
+                                self.room_db[room_name] = now_room
+                                self.save_room_db()
+                                self.send_response(passer, msg_id, Words.Result.SUCCESS, {
+                                    Words.ParamKeys.Room.ROOM_NAME: room_name,
+                                    Words.ParamKeys.Room.NOW_ROOM_DATA: now_room
+                                })
                             case _:
                                 self.send_response(passer, msg_id, Words.Result.FAILURE, 
                                                    {Words.ParamKeys.Failure.REASON: "Invalid command"})
@@ -291,6 +492,15 @@ class DatabaseServer:
                                     self.send_response(passer, msg_id, Words.Result.FAILURE, 
                                                        {Words.ParamKeys.Failure.REASON: "Missing username."})
                                     continue
+                                if username in self.room_db:
+                                    room_info = self.room_db[username]
+                                    if room_info.get(Words.ParamKeys.Room.IS_PLAYING, False):
+                                        self.send_response(passer, msg_id, Words.Result.FAILURE, 
+                                                           {Words.ParamKeys.Failure.REASON: "Cannot logout when game is in playing."})
+                                        continue
+                                    else:
+                                        del self.room_db[username]
+                                        self.save_room_db()
                                 self._set_developer_offline(username)
                                 self.send_response(passer, msg_id, Words.Result.SUCCESS)
                             case Words.Command.REGISTER:
@@ -365,9 +575,10 @@ class DatabaseServer:
                                 version = params.get(Words.ParamKeys.Metadata.VERSION)
                                 uploader = params.get(Words.ParamKeys.Metadata.UPLOADER)
                                 file_name = params.get(Words.ParamKeys.Metadata.FILE_NAME)
+                                players = params.get(Words.ParamKeys.Metadata.PLAYERS)
                                 size = params.get(Words.ParamKeys.Metadata.SIZE)
                                 sha256 = params.get(Words.ParamKeys.Metadata.SHA256)
-                                assert isinstance(game_id, str) and isinstance(version, str) and isinstance(file_name, str)
+                                assert isinstance(game_id, str) and isinstance(version, str) and isinstance(file_name, str) and isinstance(players, int)
                                 assert isinstance(uploader, str) and isinstance(size, int) and isinstance(sha256, str) and isinstance(game_name, str)
                                 # game_root_dir = GAME_FOLDER / game_id
                                 # game_root_dir.mkdir(parents=True, exist_ok=True)
@@ -430,6 +641,7 @@ class DatabaseServer:
                                 uploader = str(st.get(Words.ParamKeys.Metadata.UPLOADER))
                                 file_name = str(st.get(Words.ParamKeys.Metadata.FILE_NAME))
                                 size = st.get(Words.ParamKeys.Metadata.SIZE)
+                                players = st.get(Words.ParamKeys.Metadata.PLAYERS)
                                 sha256 = str(st.get(Words.ParamKeys.Metadata.SHA256))
 
                                 final_path = GAME_FOLDER / game_id / version / file_name
@@ -451,6 +663,7 @@ class DatabaseServer:
                                         Words.ParamKeys.Metadata.VERSION: version,
                                         Words.ParamKeys.Metadata.UPLOADER: uploader, 
                                         Words.ParamKeys.Metadata.FILE_NAME: file_name,
+                                        Words.ParamKeys.Metadata.PLAYERS: players, 
                                         Words.ParamKeys.Metadata.SIZE: size,
                                         Words.ParamKeys.Metadata.SHA256: sha256,
                                     }
@@ -515,6 +728,57 @@ class DatabaseServer:
                                             {Words.ParamKeys.Failure.REASON: "Error occurred in database server."})
                 print(f"[DatabaseServer] Exception occurred in handle_developer: {e}")
 
+    def check_game_folder(self) -> dict:
+        result: dict[str, dict] = {}
+        print("Entered check_game_folder")
+        try:
+            for p in GAME_FOLDER.iterdir():
+                if not p.is_dir():
+                    continue
+                game_id = p.name
+                big_meta_path = p / "big_metadata.json"
+                meta_obj: dict | None = None
+                if big_meta_path.exists():
+                    try:
+                        meta_obj = json.loads(big_meta_path.read_text(encoding="utf-8"))
+                    except Exception as e:
+                        print(f"[check_game_folder] failed to read big_metadata for {game_id}: {e}")
+                        meta_obj = None
+                else:
+                    # try to collect metadata from version folders (pick one and collect versions)
+                    versions = []
+                    for v in p.iterdir():
+                        if not v.is_dir():
+                            continue
+                        mpath = v / "metadata.json"
+                        if mpath.exists():
+                            try:
+                                m = json.loads(mpath.read_text(encoding="utf-8"))
+                                versions.append(m)
+                            except Exception:
+                                continue
+                    if versions:
+                        # build a simple aggregate big_meta from first entry and versions list
+                        base = dict(versions[0])
+                        base[Words.ParamKeys.Metadata.ALL_VERSIONS] = [str(m.get(Words.ParamKeys.Metadata.VERSION)) for m in versions if isinstance(m, dict)]
+                        meta_obj = base
+
+                if meta_obj is None:
+                    # no metadata available
+                    continue
+
+                # remove game_id from the metadata value (we keep folder name as the key)
+                cleaned = dict(meta_obj)
+                try:
+                    cleaned.pop(Words.ParamKeys.Metadata.GAME_ID, None)
+                except Exception:
+                    pass
+
+                result[game_id] = cleaned
+        except Exception as e:
+            print(f"[check_game_folder] unexpected error: {e}")
+        return result
+    
     def handle_upload(self, server_sock: socket.socket):
         sock, addr = server_sock.accept()
         print(f"accepted connection in handle_upload: {addr}")
@@ -538,6 +802,15 @@ class DatabaseServer:
         with self.upload_lock:
             self.upload_params["upload_done"] = True
         print("exited handle_upload")
+
+    def handle_download(self, server_sock: socket.socket, path: Path):
+        sock, addr = server_sock.accept()
+        print(f"accepted connection in handle_upload: {addr}")
+        server_sock.close()
+        file_sender = FileSender(sock, path)
+        file_sender.send()
+        file_sender.close()
+        print("exited handle_download")
 
     def _verify_player_credential(self, username, password) -> tuple[bool, str]:
         if not username:
@@ -571,6 +844,7 @@ class DatabaseServer:
 
     def _set_player_offline(self, username):
         self.player_db[username]["online"] = False
+        self.player_db[username]["current_room"] = None
         self.save_player_db()
 
     def write_player_data(self, username: str, password: str):
@@ -578,6 +852,7 @@ class DatabaseServer:
             "password": password, 
             "create_time": time.time(), 
             "last_login_time": None, 
+            "current_room": None,
             "online": False
         }
         self.save_player_db()
@@ -650,6 +925,9 @@ class DatabaseServer:
                     self.reset_player()
                 elif cmd == 'resetdeveloper':
                     self.reset_developer()
+                elif cmd == 'clearrooms':
+                    self.room_db.clear()
+                    self.save_room_db()
                 else:
                     print("invalid command.")
         except KeyboardInterrupt:
@@ -667,6 +945,7 @@ class DatabaseServer:
     def reset_player(self):
         for username in self.player_db.keys():
             self.player_db[username]["online"] = False
+            self.player_db[username]["current_room"] = None
         self.save_player_db()
 
     def reset_developer(self):
