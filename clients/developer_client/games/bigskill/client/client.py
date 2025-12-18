@@ -5,7 +5,7 @@ from typing import Optional
 
 class GameClient:
     # host and port fields are essential. You can modify it but don't erase it.
-    def __init__(self, host: str = "127.0.0.1", port: int = 12345):
+    def __init__(self, host: str = "linux1.cs.nycu.edu.tw", port: int = 12359):
         self.host = host
         self.port = port
         self.sock: Optional[socket.socket] = None

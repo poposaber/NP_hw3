@@ -83,501 +83,7 @@ class LobbyServer(ServerBase):
                 match msg_type:
                     case Words.MessageType.REQUEST:
                         assert isinstance(data, dict)
-                        cmd = data.get(Words.DataKeys.Request.COMMAND)
-                        match cmd:
-                            case Words.Command.SYNC_LOBBY_STATUS:
-                                with self.passer_player_lock:
-                                    online_players = list(self.player_passer_dict.keys())
-                                    try:
-                                        plr = self.passer_player_dict.get(passer)
-                                        assert isinstance(plr, str)
-                                        online_players.remove(plr)
-                                    except Exception:
-                                        pass
-                                self.send_response(passer, msg_id, Words.Result.SUCCESS, {
-                                    Words.ParamKeys.LobbyStatus.ONLINE_PLAYERS: online_players, 
-                                    Words.ParamKeys.LobbyStatus.ROOMS: self.room_dict
-                                })
-                            case Words.Command.CHECK_STORE:
-                                result_data = self.try_request_and_wait(Words.Command.CHECK_STORE, {})
-                                result = result_data.get(Words.DataKeys.Response.RESULT) or Words.Result.FAILURE
-                                params = result_data.get(Words.DataKeys.PARAMS) or {
-                                        Words.ParamKeys.Failure.REASON: "Unknown result."
-                                    }
-                                self.send_response(passer, msg_id, result, params)
-                            case Words.Command.DOWNLOAD_START:
-                                params = data.get(Words.DataKeys.PARAMS)
-                                assert isinstance(params, dict)
-                                result_data = self.try_request_and_wait(Words.Command.DOWNLOAD_START, params)
-                                params_from_db = result_data.get(Words.DataKeys.PARAMS)
-                                assert isinstance(params_from_db, dict)
-
-                                if result_data.get(Words.DataKeys.Response.RESULT) != Words.Result.SUCCESS:
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, params_from_db)
-                                    continue
-
-                                # Start a background transfer: connect to DB and download into cache,
-                                # then serve the cached file to the requesting client in a separate thread.
-                                db_port = params_from_db.get(Words.ParamKeys.Success.PORT)
-                                try:
-                                    transfer_id = str(uuid.uuid4())
-                                    # choose cache path (use game id if provided)
-                                    gid = params.get(Words.ParamKeys.Metadata.GAME_ID) or transfer_id
-                                    fname = params_from_db.get(Words.ParamKeys.Metadata.FILE_NAME) or f"{gid}.zip"
-                                    dst_dir = GAME_CACHE_DIR / str(gid)
-                                    dst_dir.mkdir(parents=True, exist_ok=True)
-                                    dst_path = dst_dir / fname
-
-                                    # connect to database transfer port
-                                    temp_db_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                                    temp_db_sock.settimeout(self.connect_timeout + 5)
-                                    if db_port is None:
-                                        raise RuntimeError("database did not provide transfer port")
-                                    temp_db_sock.connect((self.db_host, int(db_port)))
-                                    print("######database server connected.")
-
-                                    with self._transfer_state_lock:
-                                        self._transfer_state[transfer_id] = {"path": dst_path, "done": False, "success": False}
-
-                                    # download thread: receives file from DB and writes to dst_path
-                                    def dl_thread():
-                                        try:
-                                            fr = FileReceiver(temp_db_sock, dst_path)
-                                            print("start download. Downloading...")
-                                            ok = fr.receive()
-                                            fr.close()
-                                            with self._transfer_state_lock:
-                                                self._transfer_state[transfer_id]["done"] = True
-                                                self._transfer_state[transfer_id]["success"] = bool(ok)
-                                        except Exception as e:
-                                            print(f"[LobbyServer] download thread error: {e}")
-                                            with self._transfer_state_lock:
-                                                self._transfer_state[transfer_id]["done"] = True
-                                                self._transfer_state[transfer_id]["success"] = False
-
-                                    threading.Thread(target=dl_thread, daemon=True).start()
-
-                                    # prepare server socket for client to connect and receive the file
-                                    temp_server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                                    temp_server_sock.bind(("0.0.0.0", 0))
-                                    temp_server_sock.listen(1)
-                                    client_port = temp_server_sock.getsockname()[1]
-
-                                    # serve thread: accept client, wait for download completion, then send file
-                                    def serve_thread():
-                                        try:
-                                            client_sock, addr = temp_server_sock.accept()
-                                            print(f"client connected: {addr}")
-                                            temp_server_sock.close()
-                                            # wait for download to complete (with timeout)
-                                            waited = 0.0
-                                            interval = 0.1
-                                            timeout = max(30.0, self.db_response_timeout * 10)
-                                            while True:
-                                                with self._transfer_state_lock:
-                                                    st = self._transfer_state.get(transfer_id)
-                                                if st is None:
-                                                    client_sock.close()
-                                                    return
-                                                if st.get("done"):
-                                                    break
-                                                time.sleep(interval)
-                                                waited += interval
-                                                if waited >= timeout:
-                                                    client_sock.close()
-                                                    return
-
-                                            # if file downloaded successfully, send it
-                                            with self._transfer_state_lock:
-                                                path = self._transfer_state[transfer_id]["path"]
-                                                success = self._transfer_state[transfer_id]["success"]
-                                            if not success or not path.exists():
-                                                client_sock.close()
-                                                return
-                                            fs = FileSender(client_sock, path)
-                                            try:
-                                                fs.send()
-                                            finally:
-                                                fs.close()
-                                        except Exception as e:
-                                            print(f"[LobbyServer] serve thread error: {e}")
-
-                                    threading.Thread(target=serve_thread, daemon=True).start()
-
-                                    # reply to client with port where they should connect
-                                    self.send_response(passer, msg_id, Words.Result.SUCCESS, {
-                                        Words.ParamKeys.Success.PORT: client_port,
-                                    })
-                                except Exception as e:
-                                    print(f"[LobbyServer] failed to start transfer: {e}")
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: str(e)})
-                            case Words.Command.CREATE_ROOM:
-                                params = data.get(Words.DataKeys.PARAMS)
-                                assert isinstance(params, dict)
-                                room_name = str(params.get(Words.ParamKeys.Room.ROOM_NAME))
-                                game_id = params.get(Words.ParamKeys.Room.GAME_ID)
-                                if not room_name:
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
-                                        Words.ParamKeys.Failure.REASON: "missing field: room_name"
-                                    })
-                                    continue
-                                # get the username of the caller
-                                username = self.passer_player_dict.get(passer)
-                                result_data = self.try_request_and_wait(Words.Command.CREATE_ROOM, {
-                                    Words.ParamKeys.Room.USERNAME: username, 
-                                    Words.ParamKeys.Room.ROOM_NAME: room_name, 
-                                    Words.ParamKeys.Room.GAME_ID: game_id
-                                })
-                                result = result_data.get(Words.DataKeys.Response.RESULT)
-                                params = result_data.get(Words.DataKeys.PARAMS)
-                                expected_players = params.get(Words.ParamKeys.Room.EXPECTED_PLAYERS) if params else 0
-                                if result != Words.Result.SUCCESS:
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, params)
-                                    continue
-                                self.send_response(passer, msg_id, Words.Result.SUCCESS, params)
-                                # register room in lobby's local view
-                                self.room_dict[room_name] = {
-                                    Words.ParamKeys.Room.OWNER: username, 
-                                    Words.ParamKeys.Room.GAME_ID: game_id, 
-                                    Words.ParamKeys.Room.PLAYER_LIST: [username] if username else [], 
-                                    Words.ParamKeys.Room.EXPECTED_PLAYERS: expected_players, 
-                                    Words.ParamKeys.Room.IS_PLAYING: False
-                                }
-                                # notify all online players about new room
-                                try:
-                                    now_room = self.room_dict.get(room_name)
-                                    for p, uname in list(self.passer_player_dict.items()):
-                                        if uname is not None:
-                                            try:
-                                                self.send_event(p, Words.EventName.ROOM_UPDATED, {Words.ParamKeys.Room.ROOM_NAME: room_name, Words.ParamKeys.Room.NOW_ROOM_DATA: now_room})
-                                            except Exception:
-                                                pass
-                                except Exception as e:
-                                    print(f"[LobbyServer] notify create_room error: {e}")
-                                # start background fetch of game files into lobby cache and notify owner when ready
-                                try:
-                                    owner = self.passer_player_dict.get(passer)
-                                    if isinstance(game_id, str) and owner:
-                                        threading.Thread(target=self._fetch_game_for_room, args=(game_id, owner), daemon=True).start()
-                                except Exception as e:
-                                    print(f"[LobbyServer] failed to start background fetch thread: {e}")
-                            case Words.Command.JOIN_ROOM:
-                                params = data.get(Words.DataKeys.PARAMS)
-                                assert isinstance(params, dict)
-                                room_name = params.get(Words.ParamKeys.Room.ROOM_NAME)
-                                # prefer authenticated username
-                                username = self.passer_player_dict.get(passer)
-                                if not room_name or not isinstance(room_name, str):
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: 'missing room_name'})
-                                    continue
-                                now_room = self.room_dict.get(room_name)
-                                if now_room is None:
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: 'room not found'})
-                                    continue
-                                result_data = self.try_request_and_wait(Words.Command.JOIN_ROOM, {
-                                    Words.ParamKeys.Room.ROOM_NAME: room_name,
-                                    Words.ParamKeys.Room.USERNAME: username
-                                })
-                                if result_data.get(Words.DataKeys.Response.RESULT) != Words.Result.SUCCESS:
-                                    params = result_data.get(Words.DataKeys.PARAMS)
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, params)
-                                    continue
-                                else:
-                                    self.send_response(passer, msg_id, Words.Result.SUCCESS)
-
-                                # update lobby's local view
-                                players = now_room.get(Words.ParamKeys.Room.PLAYER_LIST) or []
-                                expected = now_room.get(Words.ParamKeys.Room.EXPECTED_PLAYERS) or 0
-                                if username in players:
-                                    # already in room
-                                    # self.send_response(passer, msg_id, Words.Result.SUCCESS, {Words.ParamKeys.Room.NOW_ROOM_DATA: now_room})
-                                    continue
-                                if expected and len(players) >= int(expected):
-                                    # self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: 'room full'})
-                                    continue
-                                # add player
-                                players.append(username)
-                                now_room[Words.ParamKeys.Room.PLAYER_LIST] = players
-                                self.room_dict[room_name] = now_room
-                                # notify all online players about room update
-                                try:
-                                    for p, uname in list(self.passer_player_dict.items()):
-                                        if uname is not None:
-                                            passer_target = p
-                                            try:
-                                                self.send_event(passer_target, Words.EventName.ROOM_UPDATED, {Words.ParamKeys.Room.ROOM_NAME: room_name, Words.ParamKeys.Room.NOW_ROOM_DATA: now_room})
-                                            except Exception:
-                                                pass
-                                except Exception as e:
-                                    print(f"[LobbyServer] notify join_room error: {e}")
-                                self.send_response(passer, msg_id, Words.Result.SUCCESS, {Words.ParamKeys.Room.NOW_ROOM_DATA: now_room})
-                            case Words.Command.LEAVE_ROOM:
-                                params = data.get(Words.DataKeys.PARAMS) or {}
-                                room_name = params.get(Words.ParamKeys.Room.ROOM_NAME)
-                                # prefer authenticated username
-                                username = self.passer_player_dict.get(passer) or params.get(Words.ParamKeys.Room.USERNAME)
-                                # forward to DB
-                                result_data = self.try_request_and_wait(Words.Command.LEAVE_ROOM, {
-                                    Words.ParamKeys.Room.ROOM_NAME: room_name,
-                                    Words.ParamKeys.Room.USERNAME: username
-                                })
-                                if result_data.get(Words.DataKeys.Response.RESULT) != Words.Result.SUCCESS:
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, result_data.get(Words.DataKeys.PARAMS))
-                                    continue
-                                params_from_db = result_data.get(Words.DataKeys.PARAMS) or {}
-                                rn = params_from_db.get(Words.ParamKeys.Room.ROOM_NAME)
-                                now_room = params_from_db.get(Words.ParamKeys.Room.NOW_ROOM_DATA)
-                                # apply to local view
-                                if rn is None:
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: 'db did not return room name'})
-                                    continue
-                                if now_room is None:
-                                    self.room_dict.pop(rn, None)
-                                else:
-                                    self.room_dict[rn] = now_room
-                                # notify all online players about room update
-                                try:
-                                    for p, uname in list(self.passer_player_dict.items()):
-                                        if uname is not None:
-                                            try:
-                                                self.send_event(p, Words.EventName.ROOM_UPDATED, {Words.ParamKeys.Room.ROOM_NAME: rn, Words.ParamKeys.Room.NOW_ROOM_DATA: now_room})
-                                            except Exception:
-                                                pass
-                                except Exception as e:
-                                    print(f"[LobbyServer] notify leave_room error: {e}")
-                                # also remove from local player's view
-                                self._remove_player_from_rooms(username)
-                                self.send_response(passer, msg_id, Words.Result.SUCCESS, params_from_db)
-                            case Words.Command.START_GAME:
-                                params = data.get(Words.DataKeys.PARAMS) or {}
-                                room_name = params.get(Words.ParamKeys.Room.ROOM_NAME)
-                                username = self.passer_player_dict.get(passer)
-                                if not room_name:
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: "missing room_name"})
-                                    continue
-                                room_info = self.room_dict.get(room_name)
-                                if room_info is None:
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: "room not found"})
-                                    continue
-                                # only owner can start
-                                owner = room_info.get(Words.ParamKeys.Room.OWNER)
-                                if owner != username:
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: "only owner can start the game"})
-                                    continue
-                                # ask DB to mark room as playing
-                                result_data = self.try_request_and_wait(Words.Command.START_GAME, {Words.ParamKeys.Room.ROOM_NAME: room_name})
-                                if result_data.get(Words.DataKeys.Response.RESULT) != Words.Result.SUCCESS:
-                                    params_from_db = result_data.get(Words.DataKeys.PARAMS) or {}
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, params_from_db)
-                                    continue
-                                params_from_db = result_data.get(Words.DataKeys.PARAMS) or {}
-                                now_room = params_from_db.get(Words.ParamKeys.Room.NOW_ROOM_DATA)
-                                if now_room and isinstance(now_room, dict):
-                                    self.room_dict[room_name] = now_room
-                                else:
-                                    self.room_dict.pop(room_name, None)
-
-                                # start game server subprocess from cache
-                                try:
-                                    game_id = room_info.get(Words.ParamKeys.Room.GAME_ID)
-                                    if not game_id:
-                                        raise RuntimeError("missing game_id for room")
-                                    server_main = GAME_CACHE_DIR / str(game_id) / "server" / "__main__.py"
-                                    if not server_main.exists():
-                                        # try fallback: any .py under server folder
-                                        sdir = GAME_CACHE_DIR / str(game_id) / "server"
-                                        if sdir.exists() and sdir.is_dir():
-                                            for f in sdir.iterdir():
-                                                if f.suffix == ".py":
-                                                    server_main = f
-                                                    break
-                                    if not server_main.exists():
-                                        raise FileNotFoundError(f"server entry not found for game {game_id}")
-
-                                    cmd = [sys.executable, str(server_main)]
-                                    kwargs = {"cwd": str(server_main.parent)}
-                                    if os.name == 'nt':
-                                        kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
-                                    else:
-                                        kwargs["start_new_session"] = True
-                                    proc = subprocess.Popen(cmd, **kwargs)
-                                    self._game_processes[room_name] = proc
-                                    # wait briefly then notify players
-                                    time.sleep(1.0)
-                                    players = self.room_dict.get(room_name, {}).get(Words.ParamKeys.Room.PLAYER_LIST) or []
-                                    with self.passer_player_lock:
-                                        for p, uname in list(self.passer_player_dict.items()):
-                                            if uname and uname in players:
-                                                try:
-                                                    self.send_event(p, Words.EventName.GAME_STARTED, {Words.ParamKeys.Metadata.GAME_ID: game_id, Words.ParamKeys.Room.ROOM_NAME: room_name})
-                                                except Exception:
-                                                    pass
-                                    self.send_response(passer, msg_id, Words.Result.SUCCESS, {Words.ParamKeys.Room.ROOM_NAME: room_name, Words.ParamKeys.Room.NOW_ROOM_DATA: self.room_dict.get(room_name)})
-                                except Exception as e:
-                                    print(f"[LobbyServer] failed to start game server: {e}")
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: str(e)})
-                            case Words.Command.LEAVE_ROOM:
-                                params = data.get(Words.DataKeys.PARAMS)
-                                assert isinstance(params, dict)
-                                room_name = params.get(Words.ParamKeys.Room.ROOM_NAME)
-                                username = self.passer_player_dict.get(passer)
-                                if not room_name or not username:
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: 'missing fields'})
-                                    continue
-                                # forward to database
-                                result_data = self.try_request_and_wait(Words.Command.LEAVE_ROOM, {
-                                    Words.ParamKeys.Room.ROOM_NAME: room_name,
-                                    Words.ParamKeys.Room.USERNAME: username
-                                })
-                                if result_data.get(Words.DataKeys.Response.RESULT) != Words.Result.SUCCESS:
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, result_data.get(Words.DataKeys.PARAMS))
-                                    continue
-
-                                params_from_db = result_data.get(Words.DataKeys.PARAMS) or {}
-                                rn = params_from_db.get(Words.ParamKeys.Room.ROOM_NAME)
-                                now_room = params_from_db.get(Words.ParamKeys.Room.NOW_ROOM_DATA)
-                                # apply to local view
-                                if rn is None:
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: 'db did not return room name'})
-                                    continue
-                                if now_room is None:
-                                    # room deleted
-                                    self.room_dict.pop(rn, None)
-                                else:
-                                    self.room_dict[rn] = now_room
-
-                                # notify all online players about room update
-                                try:
-                                    for p, uname in list(self.passer_player_dict.items()):
-                                        if uname is not None:
-                                            try:
-                                                self.send_event(p, Words.EventName.ROOM_UPDATED, {Words.ParamKeys.Room.ROOM_NAME: rn, Words.ParamKeys.Room.NOW_ROOM_DATA: now_room})
-                                            except Exception:
-                                                pass
-                                except Exception as e:
-                                    print(f"[LobbyServer] notify leave_room error: {e}")
-
-                                # also remove from local player's view
-                                self._remove_player_from_rooms(username)
-                                self.send_response(passer, msg_id, Words.Result.SUCCESS, params_from_db)
-                            case Words.Command.LOGIN:
-                                # continue
-                                # time.sleep(7)
-                                # self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: 'suduiwee', '12': 345})
-                                params = data.get(Words.DataKeys.PARAMS)
-                                assert isinstance(params, dict)
-                                username = params.get(Words.ParamKeys.Login.USERNAME)
-                                assert isinstance(username, str)
-                                # password = params.get(Words.ParamKeys.Login.PASSWORD)
-                                login_data = self.try_request_and_wait(Words.Command.LOGIN, params)
-                                
-                                if login_data[Words.DataKeys.Response.RESULT] == Words.Result.SUCCESS:
-                                    with self.passer_player_lock:
-                                        self.passer_player_dict[passer] = username
-                                        self.player_passer_dict[username] = passer
-                                    self.send_response(passer, msg_id, Words.Result.SUCCESS)
-                                    self.broadcast_player_online(username)
-                                elif login_data[Words.DataKeys.Response.RESULT] == Words.Result.FAILURE:
-                                    params = login_data.get(Words.DataKeys.PARAMS)
-                                    assert isinstance(params, dict)
-                                    # reason = params.get(Words.ParamKeys.Failure.REASON)
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, params)
-                                else:
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
-                                        Words.ParamKeys.Failure.REASON: "Unknown login result."
-                                    })
-                            case Words.Command.REGISTER:
-                                params = data.get(Words.DataKeys.PARAMS)
-                                assert isinstance(params, dict)
-                                # username = params.get(Words.ParamKeys.Register.USERNAME)
-                                # password = params.get(Words.ParamKeys.Register.PASSWORD)
-                                reg_data = self.try_request_and_wait(Words.Command.REGISTER, params)
-
-                                
-                                if reg_data[Words.DataKeys.Response.RESULT] == Words.Result.SUCCESS:
-                                    self.send_response(passer, msg_id, Words.Result.SUCCESS)
-                                elif reg_data[Words.DataKeys.Response.RESULT] == Words.Result.FAILURE:
-                                    params = reg_data.get(Words.DataKeys.PARAMS)
-                                    assert isinstance(params, dict)
-                                    reason = params.get(Words.ParamKeys.Failure.REASON)
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
-                                        Words.ParamKeys.Failure.REASON: reason
-                                    })
-                                else:
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
-                                        Words.ParamKeys.Failure.REASON: "Unknown register result."
-                                    })
-                            case Words.Command.LOGOUT:
-                                # params = data.get(Words.DataKeys.PARAMS)
-                                # assert isinstance(params, dict)
-                                with self.passer_player_lock:
-                                    username = self.passer_player_dict.get(passer)
-                                if not username:
-                                    self.send_response(passer, msg_id, Words.Result.FAILURE, {
-                                        Words.ParamKeys.Failure.REASON: "Player not logged in yet."
-                                    })
-                                    continue
-                                result_data = self.try_request_and_wait(Words.Command.LOGOUT, {
-                                    Words.ParamKeys.Logout.USERNAME: username
-                                })
-                                self.send_response(passer, msg_id, result_data[Words.DataKeys.Response.RESULT], result_data.get(Words.DataKeys.PARAMS))
-                                with self.passer_player_lock:
-                                    self.passer_player_dict[passer] = None
-                                    self.player_passer_dict.pop(username, None)
-                                # remove player from any rooms in lobby view and notify others
-                                if username:
-                                    # if DB returned room info, broadcast update
-                                    params_from_db = result_data.get(Words.DataKeys.PARAMS) or {}
-                                    rn = params_from_db.get(Words.ParamKeys.Room.ROOM_NAME)
-                                    now_room = params_from_db.get(Words.ParamKeys.Room.NOW_ROOM_DATA)
-                                    if rn:
-                                        try:
-                                            for p, uname in list(self.passer_player_dict.items()):
-                                                if uname is not None:
-                                                    try:
-                                                        self.send_event(p, Words.EventName.ROOM_UPDATED, {Words.ParamKeys.Room.ROOM_NAME: rn, Words.ParamKeys.Room.NOW_ROOM_DATA: now_room})
-                                                    except Exception:
-                                                        pass
-                                        except Exception as e:
-                                            print(f"[LobbyServer] notify logout leave_room error: {e}")
-                                    self._remove_player_from_rooms(username)
-                                self.broadcast_player_offline(username)
-
-                            case Words.Command.EXIT:
-                                with self.passer_player_lock:
-                                    username = self.passer_player_dict.get(passer)
-                                if username:
-                                    result_data = self.try_request_and_wait(Words.Command.LOGOUT, {
-                                        Words.ParamKeys.Logout.USERNAME: username
-                                    })
-                                    with self.passer_player_lock:
-                                        self.passer_player_dict[passer] = None
-                                        self.player_passer_dict.pop(username, None)
-                                    # handle room update returned from DB, notify others
-                                    params = result_data.get(Words.DataKeys.PARAMS) or {}
-                                    room_name = params.get(Words.ParamKeys.Room.ROOM_NAME)
-                                    now_room_data = params.get(Words.ParamKeys.Room.NOW_ROOM_DATA)
-                                    if room_name:
-                                        if now_room_data and isinstance(now_room_data, dict):
-                                            self.room_dict[room_name] = now_room_data
-                                        else:
-                                            self.room_dict.pop(room_name, None)
-                                        try:
-                                            for p, uname in list(self.passer_player_dict.items()):
-                                                if uname is not None:
-                                                    try:
-                                                        self.send_event(p, Words.EventName.ROOM_UPDATED, {Words.ParamKeys.Room.ROOM_NAME: room_name, Words.ParamKeys.Room.NOW_ROOM_DATA: now_room_data})
-                                                    except Exception:
-                                                        pass
-                                        except Exception as e:
-                                            print(f"[LobbyServer] notify exit leave_room error: {e}")
-                                    # remove player from rooms before broadcasting offline
-                                    self._remove_player_from_rooms(username)
-                                    self.broadcast_player_offline(username)
-                                        
-                                self.send_response(passer, msg_id, Words.Result.SUCCESS)
-                                time.sleep(3)
-                                break
+                        self._process_request(passer, msg_id, data)
                     case Words.MessageType.HEARTBEAT:
                         # time.sleep(12)
                         last_hb_time = time.time()
@@ -597,6 +103,492 @@ class LobbyServer(ServerBase):
             uname = self.passer_player_dict.pop(passer, None)
             if uname:
                 self.player_passer_dict.pop(uname, None)
+
+    def _process_request(self, passer: MessageFormatPasser, msg_id: str, data: dict):
+        try:
+            cmd = data.get(Words.DataKeys.Request.COMMAND)
+            match cmd:
+                case Words.Command.SYNC_LOBBY_STATUS:
+                    with self.passer_player_lock:
+                        online_players = list(self.player_passer_dict.keys())
+                        try:
+                            plr = self.passer_player_dict.get(passer)
+                            assert isinstance(plr, str)
+                            online_players.remove(plr)
+                        except Exception:
+                            pass
+                    self.send_response(passer, msg_id, Words.Result.SUCCESS, {
+                        Words.ParamKeys.LobbyStatus.ONLINE_PLAYERS: online_players,
+                        Words.ParamKeys.LobbyStatus.ROOMS: self.room_dict
+                    })
+                case Words.Command.CHECK_STORE:
+                    result_data = self.try_request_and_wait(Words.Command.CHECK_STORE, {})
+                    result = result_data.get(Words.DataKeys.Response.RESULT) or Words.Result.FAILURE
+                    params = result_data.get(Words.DataKeys.PARAMS) or {
+                        Words.ParamKeys.Failure.REASON: "Unknown result."
+                    }
+                    self.send_response(passer, msg_id, result, params)
+                case Words.Command.DOWNLOAD_START:
+                    params = data.get(Words.DataKeys.PARAMS)
+                    assert isinstance(params, dict)
+                    result_data = self.try_request_and_wait(Words.Command.DOWNLOAD_START, params)
+                    params_from_db = result_data.get(Words.DataKeys.PARAMS)
+                    assert isinstance(params_from_db, dict)
+
+                    if result_data.get(Words.DataKeys.Response.RESULT) != Words.Result.SUCCESS:
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, params_from_db)
+                        return
+
+                    # Start a background transfer: connect to DB and download into cache,
+                    # then serve the cached file to the requesting client in a separate thread.
+                    db_port = params_from_db.get(Words.ParamKeys.Success.PORT)
+                    try:
+                        transfer_id = str(uuid.uuid4())
+                        # choose cache path (use game id if provided)
+                        gid = params.get(Words.ParamKeys.Metadata.GAME_ID) or transfer_id
+                        fname = params_from_db.get(Words.ParamKeys.Metadata.FILE_NAME) or f"{gid}.zip"
+                        dst_dir = GAME_CACHE_DIR / str(gid)
+                        dst_dir.mkdir(parents=True, exist_ok=True)
+                        dst_path = dst_dir / fname
+
+                        # connect to database transfer port
+                        temp_db_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        temp_db_sock.settimeout(self.connect_timeout + 5)
+                        if db_port is None:
+                            raise RuntimeError("database did not provide transfer port")
+                        temp_db_sock.connect((self.db_host, int(db_port)))
+                        print("######database server connected.")
+
+                        with self._transfer_state_lock:
+                            self._transfer_state[transfer_id] = {"path": dst_path, "done": False, "success": False}
+
+                        # download thread: receives file from DB and writes to dst_path
+                        def dl_thread():
+                            try:
+                                fr = FileReceiver(temp_db_sock, dst_path)
+                                print("start download. Downloading...")
+                                ok = fr.receive()
+                                fr.close()
+                                with self._transfer_state_lock:
+                                    self._transfer_state[transfer_id]["done"] = True
+                                    self._transfer_state[transfer_id]["success"] = bool(ok)
+                            except Exception as e:
+                                print(f"[LobbyServer] download thread error: {e}")
+                                with self._transfer_state_lock:
+                                    self._transfer_state[transfer_id]["done"] = True
+                                    self._transfer_state[transfer_id]["success"] = False
+
+                        threading.Thread(target=dl_thread, daemon=True).start()
+
+                        # prepare server socket for client to connect and receive the file
+                        temp_server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        temp_server_sock.bind(("0.0.0.0", 0))
+                        temp_server_sock.listen(1)
+                        client_port = temp_server_sock.getsockname()[1]
+
+                        # serve thread: accept client, wait for download completion, then send file
+                        def serve_thread():
+                            try:
+                                client_sock, addr = temp_server_sock.accept()
+                                print(f"client connected: {addr}")
+                                temp_server_sock.close()
+                                # wait for download to complete (with timeout)
+                                waited = 0.0
+                                interval = 0.1
+                                timeout = max(30.0, self.db_response_timeout * 10)
+                                while True:
+                                    with self._transfer_state_lock:
+                                        st = self._transfer_state.get(transfer_id)
+                                    if st is None:
+                                        client_sock.close()
+                                        return
+                                    if st.get("done"):
+                                        break
+                                    time.sleep(interval)
+                                    waited += interval
+                                    if waited >= timeout:
+                                        client_sock.close()
+                                        return
+
+                                # if file downloaded successfully, send it
+                                with self._transfer_state_lock:
+                                    path = self._transfer_state[transfer_id]["path"]
+                                    success = self._transfer_state[transfer_id]["success"]
+                                if not success or not path.exists():
+                                    client_sock.close()
+                                    return
+                                fs = FileSender(client_sock, path)
+                                try:
+                                    fs.send()
+                                finally:
+                                    fs.close()
+                            except Exception as e:
+                                print(f"[LobbyServer] serve thread error: {e}")
+
+                        threading.Thread(target=serve_thread, daemon=True).start()
+
+                        # reply to client with port where they should connect
+                        self.send_response(passer, msg_id, Words.Result.SUCCESS, {
+                            Words.ParamKeys.Success.PORT: client_port,
+                        })
+                    except Exception as e:
+                        print(f"[LobbyServer] failed to start transfer: {e}")
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: str(e)})
+                case Words.Command.CREATE_ROOM:
+                    params = data.get(Words.DataKeys.PARAMS)
+                    assert isinstance(params, dict)
+                    room_name = str(params.get(Words.ParamKeys.Room.ROOM_NAME))
+                    game_id = params.get(Words.ParamKeys.Room.GAME_ID)
+                    if not room_name:
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                            Words.ParamKeys.Failure.REASON: "missing field: room_name"
+                        })
+                        return
+                    # get the username of the caller
+                    username = self.passer_player_dict.get(passer)
+                    result_data = self.try_request_and_wait(Words.Command.CREATE_ROOM, {
+                        Words.ParamKeys.Room.USERNAME: username,
+                        Words.ParamKeys.Room.ROOM_NAME: room_name,
+                        Words.ParamKeys.Room.GAME_ID: game_id
+                    })
+                    result = result_data.get(Words.DataKeys.Response.RESULT)
+                    params = result_data.get(Words.DataKeys.PARAMS)
+                    expected_players = params.get(Words.ParamKeys.Room.EXPECTED_PLAYERS) if params else 0
+                    if result != Words.Result.SUCCESS:
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, params)
+                        return
+                    self.send_response(passer, msg_id, Words.Result.SUCCESS, params)
+                    # register room in lobby's local view
+                    self.room_dict[room_name] = {
+                        Words.ParamKeys.Room.OWNER: username,
+                        Words.ParamKeys.Room.GAME_ID: game_id,
+                        Words.ParamKeys.Room.PLAYER_LIST: [username] if username else [],
+                        Words.ParamKeys.Room.EXPECTED_PLAYERS: expected_players,
+                        Words.ParamKeys.Room.IS_PLAYING: False
+                    }
+                    # notify all online players about new room
+                    try:
+                        now_room = self.room_dict.get(room_name)
+                        for p, uname in list(self.passer_player_dict.items()):
+                            if uname is not None:
+                                try:
+                                    self.send_event(p, Words.EventName.ROOM_UPDATED, {Words.ParamKeys.Room.ROOM_NAME: room_name, Words.ParamKeys.Room.NOW_ROOM_DATA: now_room})
+                                except Exception:
+                                    pass
+                    except Exception as e:
+                        print(f"[LobbyServer] notify create_room error: {e}")
+                    # start background fetch of game files into lobby cache and notify owner when ready
+                    try:
+                        owner = self.passer_player_dict.get(passer)
+                        if isinstance(game_id, str) and owner:
+                            threading.Thread(target=self._fetch_game_for_room, args=(game_id, owner), daemon=True).start()
+                    except Exception as e:
+                        print(f"[LobbyServer] failed to start background fetch thread: {e}")
+                case Words.Command.JOIN_ROOM:
+                    params = data.get(Words.DataKeys.PARAMS)
+                    assert isinstance(params, dict)
+                    room_name = params.get(Words.ParamKeys.Room.ROOM_NAME)
+                    # prefer authenticated username
+                    username = self.passer_player_dict.get(passer)
+                    if not room_name or not isinstance(room_name, str):
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: 'missing room_name'})
+                        return
+                    now_room = self.room_dict.get(room_name)
+                    if now_room is None:
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: 'room not found'})
+                        return
+                    result_data = self.try_request_and_wait(Words.Command.JOIN_ROOM, {
+                        Words.ParamKeys.Room.ROOM_NAME: room_name,
+                        Words.ParamKeys.Room.USERNAME: username
+                    })
+                    if result_data.get(Words.DataKeys.Response.RESULT) != Words.Result.SUCCESS:
+                        params = result_data.get(Words.DataKeys.PARAMS)
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, params)
+                        return
+                    else:
+                        self.send_response(passer, msg_id, Words.Result.SUCCESS)
+
+                    # update lobby's local view
+                    players = now_room.get(Words.ParamKeys.Room.PLAYER_LIST) or []
+                    expected = now_room.get(Words.ParamKeys.Room.EXPECTED_PLAYERS) or 0
+                    if username in players:
+                        # already in room
+                        return
+                    if expected and len(players) >= int(expected):
+                        return
+                    # add player
+                    players.append(username)
+                    now_room[Words.ParamKeys.Room.PLAYER_LIST] = players
+                    self.room_dict[room_name] = now_room
+                    # notify all online players about room update
+                    try:
+                        for p, uname in list(self.passer_player_dict.items()):
+                            if uname is not None:
+                                passer_target = p
+                                try:
+                                    self.send_event(passer_target, Words.EventName.ROOM_UPDATED, {Words.ParamKeys.Room.ROOM_NAME: room_name, Words.ParamKeys.Room.NOW_ROOM_DATA: now_room})
+                                except Exception:
+                                    pass
+                    except Exception as e:
+                        print(f"[LobbyServer] notify join_room error: {e}")
+                    self.send_response(passer, msg_id, Words.Result.SUCCESS, {Words.ParamKeys.Room.NOW_ROOM_DATA: now_room})
+                case Words.Command.LEAVE_ROOM:
+                    params = data.get(Words.DataKeys.PARAMS) or {}
+                    room_name = params.get(Words.ParamKeys.Room.ROOM_NAME)
+                    # prefer authenticated username
+                    username = self.passer_player_dict.get(passer) or params.get(Words.ParamKeys.Room.USERNAME)
+                    # forward to DB
+                    result_data = self.try_request_and_wait(Words.Command.LEAVE_ROOM, {
+                        Words.ParamKeys.Room.ROOM_NAME: room_name,
+                        Words.ParamKeys.Room.USERNAME: username
+                    })
+                    if result_data.get(Words.DataKeys.Response.RESULT) != Words.Result.SUCCESS:
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, result_data.get(Words.DataKeys.PARAMS))
+                        return
+                    params_from_db = result_data.get(Words.DataKeys.PARAMS) or {}
+                    rn = params_from_db.get(Words.ParamKeys.Room.ROOM_NAME)
+                    now_room = params_from_db.get(Words.ParamKeys.Room.NOW_ROOM_DATA)
+                    # apply to local view
+                    if rn is None:
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: 'db did not return room name'})
+                        return
+                    if now_room is None:
+                        self.room_dict.pop(rn, None)
+                    else:
+                        self.room_dict[rn] = now_room
+                    # notify all online players about room update
+                    try:
+                        for p, uname in list(self.passer_player_dict.items()):
+                            if uname is not None:
+                                try:
+                                    self.send_event(p, Words.EventName.ROOM_UPDATED, {Words.ParamKeys.Room.ROOM_NAME: rn, Words.ParamKeys.Room.NOW_ROOM_DATA: now_room})
+                                except Exception:
+                                    pass
+                    except Exception as e:
+                        print(f"[LobbyServer] notify leave_room error: {e}")
+                    # also remove from local player's view
+                    self._remove_player_from_rooms(username)
+                    self.send_response(passer, msg_id, Words.Result.SUCCESS, params_from_db)
+                case Words.Command.START_GAME:
+                    params = data.get(Words.DataKeys.PARAMS) or {}
+                    room_name = params.get(Words.ParamKeys.Room.ROOM_NAME)
+                    username = self.passer_player_dict.get(passer)
+                    if not room_name:
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: "missing room_name"})
+                        return
+                    room_info = self.room_dict.get(room_name)
+                    if room_info is None:
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: "room not found"})
+                        return
+                    # only owner can start
+                    owner = room_info.get(Words.ParamKeys.Room.OWNER)
+                    if owner != username:
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: "only owner can start the game"})
+                        return
+                    # ask DB to mark room as playing
+                    result_data = self.try_request_and_wait(Words.Command.START_GAME, {Words.ParamKeys.Room.ROOM_NAME: room_name})
+                    if result_data.get(Words.DataKeys.Response.RESULT) != Words.Result.SUCCESS:
+                        params_from_db = result_data.get(Words.DataKeys.PARAMS) or {}
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, params_from_db)
+                        return
+                    params_from_db = result_data.get(Words.DataKeys.PARAMS) or {}
+                    now_room = params_from_db.get(Words.ParamKeys.Room.NOW_ROOM_DATA)
+                    if now_room and isinstance(now_room, dict):
+                        self.room_dict[room_name] = now_room
+                    else:
+                        self.room_dict.pop(room_name, None)
+
+                    # start game server subprocess from cache
+                    try:
+                        game_id = room_info.get(Words.ParamKeys.Room.GAME_ID)
+                        if not game_id:
+                            raise RuntimeError("missing game_id for room")
+                        server_main = GAME_CACHE_DIR / str(game_id) / "server" / "__main__.py"
+                        if not server_main.exists():
+                            # try fallback: any .py under server folder
+                            sdir = GAME_CACHE_DIR / str(game_id) / "server"
+                            if sdir.exists() and sdir.is_dir():
+                                for f in sdir.iterdir():
+                                    if f.suffix == ".py":
+                                        server_main = f
+                                        break
+                        if not server_main.exists():
+                            raise FileNotFoundError(f"server entry not found for game {game_id}")
+
+                        cmd = [sys.executable, str(server_main)]
+                        kwargs = {"cwd": str(server_main.parent)}
+                        if os.name == 'nt':
+                            kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
+                        else:
+                            kwargs["start_new_session"] = True
+                        proc = subprocess.Popen(cmd, **kwargs)
+                        self._game_processes[room_name] = proc
+                        # wait briefly then notify players
+                        time.sleep(1.0)
+                        players = self.room_dict.get(room_name, {}).get(Words.ParamKeys.Room.PLAYER_LIST) or []
+                        with self.passer_player_lock:
+                            for p, uname in list(self.passer_player_dict.items()):
+                                if uname and uname in players:
+                                    try:
+                                        self.send_event(p, Words.EventName.GAME_STARTED, {Words.ParamKeys.Metadata.GAME_ID: game_id, Words.ParamKeys.Room.ROOM_NAME: room_name})
+                                    except Exception:
+                                        pass
+                        self.send_response(passer, msg_id, Words.Result.SUCCESS, {Words.ParamKeys.Room.ROOM_NAME: room_name, Words.ParamKeys.Room.NOW_ROOM_DATA: self.room_dict.get(room_name)})
+                    except Exception as e:
+                        print(f"[LobbyServer] failed to start game server: {e}")
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: str(e)})
+                case Words.Command.LEAVE_ROOM:
+                    params = data.get(Words.DataKeys.PARAMS)
+                    assert isinstance(params, dict)
+                    room_name = params.get(Words.ParamKeys.Room.ROOM_NAME)
+                    username = self.passer_player_dict.get(passer)
+                    if not room_name or not username:
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: 'missing fields'})
+                        return
+                    # forward to database
+                    result_data = self.try_request_and_wait(Words.Command.LEAVE_ROOM, {
+                        Words.ParamKeys.Room.ROOM_NAME: room_name,
+                        Words.ParamKeys.Room.USERNAME: username
+                    })
+                    if result_data.get(Words.DataKeys.Response.RESULT) != Words.Result.SUCCESS:
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, result_data.get(Words.DataKeys.PARAMS))
+                        return
+
+                    params_from_db = result_data.get(Words.DataKeys.PARAMS) or {}
+                    rn = params_from_db.get(Words.ParamKeys.Room.ROOM_NAME)
+                    now_room = params_from_db.get(Words.ParamKeys.Room.NOW_ROOM_DATA)
+                    # apply to local view
+                    if rn is None:
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, {Words.ParamKeys.Failure.REASON: 'db did not return room name'})
+                        return
+                    if now_room is None:
+                        # room deleted
+                        self.room_dict.pop(rn, None)
+                    else:
+                        self.room_dict[rn] = now_room
+
+                    # notify all online players about room update
+                    try:
+                        for p, uname in list(self.passer_player_dict.items()):
+                            if uname is not None:
+                                try:
+                                    self.send_event(p, Words.EventName.ROOM_UPDATED, {Words.ParamKeys.Room.ROOM_NAME: rn, Words.ParamKeys.Room.NOW_ROOM_DATA: now_room})
+                                except Exception:
+                                    pass
+                    except Exception as e:
+                        print(f"[LobbyServer] notify leave_room error: {e}")
+
+                    # also remove from local player's view
+                    self._remove_player_from_rooms(username)
+                    self.send_response(passer, msg_id, Words.Result.SUCCESS, params_from_db)
+                case Words.Command.LOGIN:
+                    params = data.get(Words.DataKeys.PARAMS)
+                    assert isinstance(params, dict)
+                    username = params.get(Words.ParamKeys.Login.USERNAME)
+                    assert isinstance(username, str)
+                    login_data = self.try_request_and_wait(Words.Command.LOGIN, params)
+
+                    if login_data[Words.DataKeys.Response.RESULT] == Words.Result.SUCCESS:
+                        with self.passer_player_lock:
+                            self.passer_player_dict[passer] = username
+                            self.player_passer_dict[username] = passer
+                        self.send_response(passer, msg_id, Words.Result.SUCCESS)
+                        self.broadcast_player_online(username)
+                    elif login_data[Words.DataKeys.Response.RESULT] == Words.Result.FAILURE:
+                        params = login_data.get(Words.DataKeys.PARAMS)
+                        assert isinstance(params, dict)
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, params)
+                    else:
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                            Words.ParamKeys.Failure.REASON: "Unknown login result."
+                        })
+                case Words.Command.REGISTER:
+                    params = data.get(Words.DataKeys.PARAMS)
+                    assert isinstance(params, dict)
+                    reg_data = self.try_request_and_wait(Words.Command.REGISTER, params)
+
+                    if reg_data[Words.DataKeys.Response.RESULT] == Words.Result.SUCCESS:
+                        self.send_response(passer, msg_id, Words.Result.SUCCESS)
+                    elif reg_data[Words.DataKeys.Response.RESULT] == Words.Result.FAILURE:
+                        params = reg_data.get(Words.DataKeys.PARAMS)
+                        assert isinstance(params, dict)
+                        reason = params.get(Words.ParamKeys.Failure.REASON)
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                            Words.ParamKeys.Failure.REASON: reason
+                        })
+                    else:
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                            Words.ParamKeys.Failure.REASON: "Unknown register result."
+                        })
+                case Words.Command.LOGOUT:
+                    with self.passer_player_lock:
+                        username = self.passer_player_dict.get(passer)
+                    if not username:
+                        self.send_response(passer, msg_id, Words.Result.FAILURE, {
+                            Words.ParamKeys.Failure.REASON: "Player not logged in yet."
+                        })
+                        return
+                    result_data = self.try_request_and_wait(Words.Command.LOGOUT, {
+                        Words.ParamKeys.Logout.USERNAME: username
+                    })
+                    self.send_response(passer, msg_id, result_data[Words.DataKeys.Response.RESULT], result_data.get(Words.DataKeys.PARAMS))
+                    with self.passer_player_lock:
+                        self.passer_player_dict[passer] = None
+                        self.player_passer_dict.pop(username, None)
+                    # remove player from any rooms in lobby view and notify others
+                    if username:
+                        # if DB returned room info, broadcast update
+                        params_from_db = result_data.get(Words.DataKeys.PARAMS) or {}
+                        rn = params_from_db.get(Words.ParamKeys.Room.ROOM_NAME)
+                        now_room = params_from_db.get(Words.ParamKeys.Room.NOW_ROOM_DATA)
+                        if rn:
+                            try:
+                                for p, uname in list(self.passer_player_dict.items()):
+                                    if uname is not None:
+                                        try:
+                                            self.send_event(p, Words.EventName.ROOM_UPDATED, {Words.ParamKeys.Room.ROOM_NAME: rn, Words.ParamKeys.Room.NOW_ROOM_DATA: now_room})
+                                        except Exception:
+                                            pass
+                            except Exception as e:
+                                print(f"[LobbyServer] notify logout leave_room error: {e}")
+                        self._remove_player_from_rooms(username)
+                    self.broadcast_player_offline(username)
+                case Words.Command.EXIT:
+                    with self.passer_player_lock:
+                        username = self.passer_player_dict.get(passer)
+                    if username:
+                        result_data = self.try_request_and_wait(Words.Command.LOGOUT, {
+                            Words.ParamKeys.Logout.USERNAME: username
+                        })
+                        with self.passer_player_lock:
+                            self.passer_player_dict[passer] = None
+                            self.player_passer_dict.pop(username, None)
+                        # handle room update returned from DB, notify others
+                        params = result_data.get(Words.DataKeys.PARAMS) or {}
+                        room_name = params.get(Words.ParamKeys.Room.ROOM_NAME)
+                        now_room_data = params.get(Words.ParamKeys.Room.NOW_ROOM_DATA)
+                        if room_name:
+                            if now_room_data and isinstance(now_room_data, dict):
+                                self.room_dict[room_name] = now_room_data
+                            else:
+                                self.room_dict.pop(room_name, None)
+                            try:
+                                for p, uname in list(self.passer_player_dict.items()):
+                                    if uname is not None:
+                                        try:
+                                            self.send_event(p, Words.EventName.ROOM_UPDATED, {Words.ParamKeys.Room.ROOM_NAME: room_name, Words.ParamKeys.Room.NOW_ROOM_DATA: now_room_data})
+                                        except Exception:
+                                            pass
+                            except Exception as e:
+                                print(f"[LobbyServer] notify exit leave_room error: {e}")
+                        # remove player from rooms before broadcasting offline
+                        self._remove_player_from_rooms(username)
+                        self.broadcast_player_offline(username)
+
+                    self.send_response(passer, msg_id, Words.Result.SUCCESS)
+                    time.sleep(3)
+        except Exception as e:
+            print(f"[LobbyServer] _process_request error: {e}")
 
     def download_from_db(self, params: dict):
         # simple wrapper to fetch a game into cache (no owner notification)

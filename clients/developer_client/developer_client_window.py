@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 
 class DeveloperClientWindow(ClientWindowBase):
     # LOGIN_TIMEOUT = 5.0
-    def __init__(self, host = "127.0.0.1", port = 21355) -> None:
+    def __init__(self, host = "linux1.cs.nycu.edu.tw", port = 21355) -> None:
         # GUI 與 client 分離：建立 PlayerClient 實例
         # self.client = PlayerClient(host=host, port=port, 
         #                            on_connection_done=self._on_client_connection_done, 

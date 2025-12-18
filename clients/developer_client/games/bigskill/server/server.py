@@ -3,7 +3,7 @@ import threading
 import time
 
 class GameServer:
-    def __init__(self, host: str = "0.0.0.0", port: int = 12345) -> None:
+    def __init__(self, host: str = "0.0.0.0", port: int = 12359) -> None:
         self.host = host
         self.port = port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

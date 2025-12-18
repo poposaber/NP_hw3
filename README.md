@@ -8,4 +8,8 @@
    - PowerShell: .venv\Scripts\Activate.ps1
    - CMD: .venv\Scripts\activate.bat
    - POSIX: source .venv/bin/activate
-4. Run: python -m your_entry_point
+4. Install Requirements:
+   python -m pip install -r requirements.txt
+5. Run: 
+   for developers: python -m clients.developer_client
+   for players: python -m clients.player_client

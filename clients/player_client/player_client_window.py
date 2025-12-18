@@ -25,7 +25,7 @@ GAME_DIR = Path(__file__).resolve().parent / "games"
 
 class PlayerClientWindow(ClientWindowBase):
     # LOGIN_TIMEOUT = 5.0
-    def __init__(self, host = "127.0.0.1", port = 21354) -> None:
+    def __init__(self, host = "linux1.cs.nycu.edu.tw", port = 21354) -> None:
         # GUI 與 client 分離：建立 PlayerClient 實例
         # self.client = PlayerClient(host=host, port=port, 
         #                            on_connection_done=self._on_client_connection_done, 
@@ -51,7 +51,9 @@ class PlayerClientWindow(ClientWindowBase):
 
 
         self.my_games_frame = customtkinter.CTkFrame(master=self.home_frame, corner_radius=0, width=800, height=560)
-        customtkinter.CTkLabel(master=self.my_games_frame, text="my games!").place(relx=0.5, rely=0.5, anchor=tkinter.CENTER)
+        # list of downloaded games for this user
+        self.my_games_list = ObjectList(self.my_games_frame, width=780, height=520)
+        self.my_games_list.place(relx=0, rely=0)
 
         self.lobby_frame = customtkinter.CTkFrame(master=self.home_frame, corner_radius=0, width=800, height=560)
         customtkinter.CTkLabel(master=self.lobby_frame, text="lobby!").place(relx=0.5, rely=0.5, anchor=tkinter.CENTER)
@@ -124,6 +126,11 @@ class PlayerClientWindow(ClientWindowBase):
             self.home_tabbar.show("Store")
             self.update_users_and_rooms()
             self.update_store()
+            # populate My Games list
+            try:
+                threading.Thread(target=self.scan_games_and_update_dict, daemon=True).start()
+            except Exception:
+                pass
 
     def _on_recv_message(self, msg_tuple: tuple[str, str, dict]):
         _, msg_type, data = msg_tuple
@@ -492,6 +499,11 @@ class PlayerClientWindow(ClientWindowBase):
             else:
                 self.choose_game_combobox.configure(values=list(self.game_name_to_id.keys()))
                 self.create_room_btn.configure(state="normal")
+        if name == "My Games":
+            try:
+                threading.Thread(target=self.scan_games_and_update_dict, daemon=True).start()
+            except Exception:
+                pass
 
     def update_store(self):
         threading.Thread(target=self._update_store_thread).start()
@@ -528,13 +540,25 @@ class PlayerClientWindow(ClientWindowBase):
     def _on_download_game_result_ui(self, success: bool, params: dict):
         if success:
             self._notify_info("Download Game", "Game successfully downloaded.")
+            try:
+                threading.Thread(target=self.scan_games_and_update_dict, daemon=True).start()
+            except Exception:
+                pass
 
 
     def scan_games_and_update_dict(self):
+        print("scanning games...")
         try:
             assert self.client.username is not None
             user_game_dir = GAME_DIR / self.client.username
+            self.game_name_to_id.clear()
+            self.game_id_dict.clear()
+            items: list[tuple[str, str]] = []
+            if not user_game_dir.exists():
+                # ensure dir exists and clear UI
+                user_game_dir.mkdir(parents=True, exist_ok=True)
             for p in user_game_dir.iterdir():
+                print(f" found game dir: {p}")
                 if not p.is_dir():
                     continue
                 game_id = p.name
@@ -553,10 +577,22 @@ class PlayerClientWindow(ClientWindowBase):
                         display = game_id
                 self.game_name_to_id[display] = game_id
                 self.game_id_dict[game_id] = {
-                    "name": display, 
-                    "version": version, 
+                    "name": display,
+                    "version": version,
                     "players": players
                 }
+                items.append((game_id, f"{display} (v{version})"))
+            # update UI on main thread
+            try:
+                def _update_my_games():
+                    try:
+                        print(f"[scan_games] updating UI with {len(items)} items")
+                        self.my_games_list.set_items(items, lambda u: [("Update", (lambda: None), True)])
+                    except Exception as e:
+                        print(f"[scan_games] UI update error: {e}")
+                self.app.after(0, _update_my_games)
+            except Exception:
+                pass
         except Exception as e:
             print(f"[scan_games] error: {e}")
 

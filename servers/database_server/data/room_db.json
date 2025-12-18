@@ -1,12 +1,1 @@
-{
-  "fuck": {
-    "owner": "kkk",
-    "game_id": "bigskill",
-    "player_list": [
-      "kkk",
-      "barry"
-    ],
-    "expected_players": 2,
-    "is_playing": true
-  }
-}
+{}

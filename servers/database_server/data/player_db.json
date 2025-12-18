@@ -2,16 +2,16 @@
   "barry": {
     "password": "qwert",
     "create_time": 1765036356.9944448,
-    "last_login_time": 1765999253.634827,
-    "current_room": "fuck",
-    "online": true
+    "last_login_time": 1766002167.081618,
+    "current_room": null,
+    "online": false
   },
   "kkk": {
     "password": "this",
     "create_time": 1765095445.8486693,
     "last_login_time": 1765999265.4751918,
-    "current_room": "fuck",
-    "online": true
+    "current_room": null,
+    "online": false
   },
   "other": {
     "password": "that",

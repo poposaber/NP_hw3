@@ -23,12 +23,22 @@ class ObjectList(customtkinter.CTkScrollableFrame):
         #     self._scrollable_frame.grid_columnconfigure(0, weight=1)
         # except Exception:
             # Fallback if internal name changes in future versions
-        self.grid_columnconfigure(0, weight=1)
+        # prefer configuring internal scrollable frame if available
+        parent_container = getattr(self, "_scrollable_frame", None)
+        if parent_container is not None:
+            try:
+                parent_container.grid_columnconfigure(0, weight=1)
+            except Exception:
+                pass
+            print(f"[ObjectList] using internal _scrollable_frame as parent: {type(parent_container)}")
+        else:
+            self.grid_columnconfigure(0, weight=1)
         self._rows: dict[str, dict] = {}  # key -> {frame, label, btns(list), btn_bar}
 
     def clear(self):
         for row in list(self._rows.values()):
             try:
+                print(f"[ObjectList] clearing row {row['label'].cget('text')}")
                 row["frame"].destroy()
             except Exception:
                 pass
@@ -57,7 +67,9 @@ class ObjectList(customtkinter.CTkScrollableFrame):
             return
 
         # Full-width horizontal strip with fixed height
-        row = customtkinter.CTkFrame(self, height=ROW_HEIGHT)
+        # place rows inside internal scrollable frame if present
+        parent_container = getattr(self, "_scrollable_frame", self)
+        row = customtkinter.CTkFrame(parent_container, height=ROW_HEIGHT)
         row.grid(sticky="ew", padx=PAD_X, pady=PAD_Y)
         row.grid_propagate(False)  # keep fixed height
         row.grid_columnconfigure(0, weight=1)  # label expands
@@ -78,7 +90,7 @@ class ObjectList(customtkinter.CTkScrollableFrame):
             btn.grid(row=0, column=len(btns), padx=6)
             btn.configure(state=("normal" if enabled else "disabled"))
             btns.append(btn)
-
+        print(f"[ObjectList] add_item key={key} text={text} actions={len(actions)}")
         self._rows[key] = {"frame": row, "label": lbl, "btns": btns, "btn_bar": btn_bar}
 
     def update_item_text(self, key: str, text: str):
