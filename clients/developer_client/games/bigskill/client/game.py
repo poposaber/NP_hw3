@@ -9,9 +9,8 @@ from message_format import MessageFormat
 class Game(Interactable):
     TOTAL_ROUNDS = 9
 
-    def __init__(self, game_client_tcp_sock: socket.socket, lobby_tcp_sock: socket.socket, is_player_a: bool):
+    def __init__(self, game_client_tcp_sock: socket.socket, is_player_a: bool):
         self.game_client_tcp_sock = game_client_tcp_sock
-        self.lobby_tcp_sock = lobby_tcp_sock
         self.player = Player()
         self.player.is_player_a = is_player_a
         self.opponent = Player()
@@ -680,10 +679,11 @@ class Game(Interactable):
             raise e
     
     def send_win_message_and_wait_done(self):
-        try:
-            self.send_message_format(self.lobby_tcp_sock, Protocols.Command.RECORD_WIN)
-            if not self.receive_and_check_is_message_format_name(self.lobby_tcp_sock, Protocols.Response.WIN_RECORD_DONE):
-                raise Exception("Did not receive WIN_RECORD_DONE.")
-        except Exception as e:
-            print(f"Error sending win message: {e}")
-            raise e
+        pass
+        # try:
+        #     self.send_message_format(self.lobby_tcp_sock, Protocols.Command.RECORD_WIN)
+        #     if not self.receive_and_check_is_message_format_name(self.lobby_tcp_sock, Protocols.Response.WIN_RECORD_DONE):
+        #         raise Exception("Did not receive WIN_RECORD_DONE.")
+        # except Exception as e:
+        #     print(f"Error sending win message: {e}")
+        #     raise e

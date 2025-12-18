@@ -1,0 +1,44 @@
+{
+  "barry": {
+    "password": "bababab",
+    "games_played": 28,
+    "games_won": 14,
+    "online": false,
+    "current_room_id": null
+  },
+  "test": {
+    "password": "testing",
+    "games_played": 5,
+    "games_won": 4,
+    "online": false,
+    "current_room_id": null
+  },
+  "test2": {
+    "password": "testing22",
+    "games_played": 4,
+    "games_won": 1,
+    "online": false,
+    "current_room_id": null
+  },
+  "test3": {
+    "password": "pswd",
+    "games_played": 0,
+    "games_won": 0,
+    "online": false,
+    "current_room_id": null
+  },
+  "aaron": {
+    "password": "qwerty",
+    "games_played": 25,
+    "games_won": 12,
+    "online": false,
+    "current_room_id": null
+  },
+  "in\"ab\"out": {
+    "password": "also\"'\"here",
+    "games_played": 0,
+    "games_won": 0,
+    "online": false,
+    "current_room_id": null
+  }
+}

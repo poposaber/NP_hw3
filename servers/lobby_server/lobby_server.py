@@ -63,6 +63,7 @@ class LobbyServer(ServerBase):
         self._transfer_state_lock = threading.Lock()
         # map room_name -> subprocess.Popen for running game server
         self._game_processes: dict[str, subprocess.Popen] = {}
+        self._game_logfiles: dict[str, any] = {}
 
     def on_new_connection(self, received_message_id: str, role: str, passer: MessageFormatPasser, handshake_data: dict):
         match role:
@@ -305,8 +306,6 @@ class LobbyServer(ServerBase):
                         params = result_data.get(Words.DataKeys.PARAMS)
                         self.send_response(passer, msg_id, Words.Result.FAILURE, params)
                         return
-                    else:
-                        self.send_response(passer, msg_id, Words.Result.SUCCESS)
 
                     # update lobby's local view
                     players = now_room.get(Words.ParamKeys.Room.PLAYER_LIST) or []
@@ -415,12 +414,41 @@ class LobbyServer(ServerBase):
                         if not server_main.exists():
                             raise FileNotFoundError(f"server entry not found for game {game_id}")
 
+                        # choose an available port for the game server to avoid EADDRINUSE
+                        # try:
+                        #     temp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        #     temp_sock.bind(("0.0.0.0", 0))
+                        #     chosen_port = temp_sock.getsockname()[1]
+                        #     temp_sock.close()
+                        # except Exception:
+                        #     chosen_port = None
+                        # if chosen_port:
+                        #     cmd = [sys.executable, str(server_main), str(chosen_port)]
+                        # else:
                         cmd = [sys.executable, str(server_main)]
                         kwargs = {"cwd": str(server_main.parent)}
                         if os.name == 'nt':
                             kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
                         else:
+                            print("Starting game server without new console (non-Windows OS).")
                             kwargs["start_new_session"] = True
+                            kwargs["stdin"] = subprocess.DEVNULL
+                            kwargs["close_fds"] = True
+                            try:
+                                log_dir = server_main.parent
+                                log_dir.mkdir(parents=True, exist_ok=True)
+                            except Exception:
+                                pass
+                            try:
+                                log_path = server_main.parent / "server.log"
+                                lf = open(log_path, "a", buffering=1, encoding="utf-8", errors="ignore")
+                                kwargs["stdout"] = lf
+                                kwargs["stderr"] = subprocess.STDOUT
+                                # keep reference to logfile so it isn't garbage-collected/closed
+                                self._game_logfiles[room_name] = lf
+                            except Exception:
+                                # fallback: don't redirect stdout/stderr if log open fails
+                                pass
                         proc = subprocess.Popen(cmd, **kwargs)
                         self._game_processes[room_name] = proc
                         # wait briefly then notify players
@@ -430,7 +458,14 @@ class LobbyServer(ServerBase):
                             for p, uname in list(self.passer_player_dict.items()):
                                 if uname and uname in players:
                                     try:
-                                        self.send_event(p, Words.EventName.GAME_STARTED, {Words.ParamKeys.Metadata.GAME_ID: game_id, Words.ParamKeys.Room.ROOM_NAME: room_name})
+                                        ev = {Words.ParamKeys.Metadata.GAME_ID: game_id, Words.ParamKeys.Room.ROOM_NAME: room_name}
+                                        # if chosen_port:
+                                        #     ev[Words.ParamKeys.Success.PORT] = chosen_port
+                                        #     try:
+                                        #         ev['host'] = self.host
+                                        #     except Exception:
+                                        #         pass
+                                        self.send_event(p, Words.EventName.GAME_STARTED, ev)
                                     except Exception:
                                         pass
                         self.send_response(passer, msg_id, Words.Result.SUCCESS, {Words.ParamKeys.Room.ROOM_NAME: room_name, Words.ParamKeys.Room.NOW_ROOM_DATA: self.room_dict.get(room_name)})

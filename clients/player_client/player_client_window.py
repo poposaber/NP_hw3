@@ -16,6 +16,7 @@ from tkinter import messagebox, simpledialog
 import subprocess
 import sys
 import os
+import platform
 
 NORMAL_LABEL_COLOR = "#5882ff"
 HOVER_LABEL_COLOR = "#295fff"
@@ -171,6 +172,8 @@ class PlayerClientWindow(ClientWindowBase):
                             assert isinstance(param, dict)
                             game_id = str(param.get(Words.ParamKeys.Metadata.GAME_ID))
                             room_name = param.get(Words.ParamKeys.Room.ROOM_NAME)
+                            # host = param.get('host')
+                            # port = param.get(Words.ParamKeys.Success.PORT)
                             try:
                                 self.app.after(0, self._handle_game_started_ui, game_id, room_name)
                             except Exception:
@@ -295,7 +298,7 @@ class PlayerClientWindow(ClientWindowBase):
             self.room_players_list.clear()
             players = now_room.get(Words.ParamKeys.Room.PLAYER_LIST) or []
             for p in players:
-                self.room_players_list.add_item(p, p, [])
+                self.room_players_list.add_item(p, p, [("button", lambda: None, True)])
             self.start_game_btn.place(relx=0.5, rely=0.9, anchor=tkinter.CENTER)
             self.leave_room_btn.place(relx=0.8, rely=0.9, anchor=tkinter.CENTER)
             try:
@@ -351,7 +354,7 @@ class PlayerClientWindow(ClientWindowBase):
                 pass
             for p in players:
                 try:
-                    self.room_players_list.add_item(p, p, [])
+                    self.room_players_list.add_item(p, p, [("button", lambda: None, True)])
                 except Exception:
                     pass
             # if no players left, hide my room
@@ -475,11 +478,21 @@ class PlayerClientWindow(ClientWindowBase):
                 print(f"client entry not found for game {game_id}")
                 return
             cmd = [sys.executable, str(client_main)]
+            # if lobby provided host/port, pass them to the client
+            # if host:
+            #     cmd.append(str(host))
+            # if port:
+            #     cmd.append(str(port))
             kwargs = {"cwd": str(client_main.parent)}
-            if os.name == 'nt':
-                kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
+            # Use OS-aware spawn options: Windows gets a new console; POSIX detaches safely
+            if platform.system().lower().startswith("win"):
+                try:
+                    kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
+                except Exception:
+                    pass
             else:
                 kwargs["start_new_session"] = True
+                kwargs["stdin"] = subprocess.DEVNULL
             subprocess.Popen(cmd, **kwargs)
         except Exception as e:
             print(f"[PlayerClientWindow] _handle_game_started_ui error: {e}")
