@@ -11,5 +11,5 @@
 4. Install Requirements:
    python -m pip install -r requirements.txt
 5. Run: 
-   for developers: python -m clients.developer_client
-   for players: python -m clients.player_client
+   - For developers: python -m clients.developer_client
+   - For players: python -m clients.player_client
